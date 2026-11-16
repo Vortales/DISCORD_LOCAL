@@ -6,18 +6,15 @@ Discord in a persistent Chromium profile; you sign in yourself in the browser.
 It does not extract tokens or inspect Discord's local cache. UI selectors can
 change when Discord updates its website.
 
-Install:
-    python -m pip install playwright
-    python -m playwright install chromium
-
 Run:
     python discord_forum_collect.py
 
-The configured server/forum IDs below are used by default; optional positional
-IDs can override them. First run: sign in in the opened browser if needed. The
-script waits for the forum to load and then continues automatically. Later runs
-reuse .discord_browser_profile. Output: discord_forum_export/posts.jsonl and
-downloaded attachments.
+On first run, the script installs Playwright and its Chromium browser if absent.
+This requires internet access. The configured server/forum IDs below are used
+by default; optional positional IDs can override them. Sign in in the opened
+browser if needed. The script waits for the forum to load and continues
+automatically. Later runs reuse .discord_browser_profile. Output:
+discord_forum_export/posts.jsonl and downloaded attachments.
 """
 
 from __future__ import annotations
@@ -25,13 +22,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from playwright.async_api import async_playwright, Page, BrowserContext
+
+def ensure_playwright_package() -> None:
+    """Install Playwright into the current interpreter if it is missing."""
+    if importlib.util.find_spec("playwright") is None:
+        print("Playwright not found; installing it into this Python environment…")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "playwright"],
+            check=True,
+        )
+
+
+ensure_playwright_package()
+from playwright.async_api import async_playwright, Page, BrowserContext  # noqa: E402
 
 
 DEFAULT_GUILD_ID = "1514607659758653560"
@@ -206,6 +217,21 @@ async def main_async(args: argparse.Namespace) -> None:
     profile.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as p:
+        if not Path(p.chromium.executable_path).is_file():
+            print("Playwright Chromium not found; downloading it now (this may take a while)…")
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    "Could not install Chromium. Check internet access and rerun the script."
+                ) from exc
+            if not Path(p.chromium.executable_path).is_file():
+                raise RuntimeError("Chromium installation finished, but its executable is still missing.")
+
         context = await p.chromium.launch_persistent_context(
             user_data_dir=str(profile.resolve()),
             headless=False,
