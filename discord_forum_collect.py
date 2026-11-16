@@ -11,11 +11,13 @@ Install:
     python -m playwright install chromium
 
 Run:
-    python discord_forum_collect.py GUILD_ID FORUM_CHANNEL_ID
+    python discord_forum_collect.py
 
-First run: sign in in the opened browser, open the requested forum, then return
-to the terminal and press Enter. Later runs reuse .discord_browser_profile.
-Output: discord_forum_export/posts.jsonl and downloaded attachments.
+The configured server/forum IDs below are used by default; optional positional
+IDs can override them. First run: sign in in the opened browser if needed. The
+script waits for the forum to load and then continues automatically. Later runs
+reuse .discord_browser_profile. Output: discord_forum_export/posts.jsonl and
+downloaded attachments.
 """
 
 from __future__ import annotations
@@ -30,6 +32,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from playwright.async_api import async_playwright, Page, BrowserContext
+
+
+DEFAULT_GUILD_ID = "1514607659758653560"
+DEFAULT_FORUM_CHANNEL_ID = "1515423283606982776"
 
 
 MESSAGE_SCRIPT = r"""() => {
@@ -208,9 +214,12 @@ async def main_async(args: argparse.Namespace) -> None:
         )
         page = context.pages[0] if context.pages else await context.new_page()
         await page.goto(channel_url, wait_until="domcontentloaded")
-        print("В окне браузера войдите в Discord при необходимости и дождитесь загрузки форума.")
-        await asyncio.to_thread(input, "Когда форум открылся, нажмите Enter здесь... ")
-        await page.goto(channel_url, wait_until="domcontentloaded")
+        print("Если потребуется, войдите в Discord в окне браузера. Ожидаю загрузку форум-канала…")
+        await page.wait_for_function(
+            "([guild, channel]) => location.pathname.startsWith(`/channels/${guild}/${channel}`)",
+            arg=[guild_id, channel_id],
+            timeout=300_000,
+        )
         await page.wait_for_timeout(5000)
 
         posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
@@ -252,8 +261,8 @@ async def main_async(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Собрать публикации и вложения из доступного Discord-форума через веб-интерфейс.")
-    parser.add_argument("guild_id", help="ID сервера")
-    parser.add_argument("channel_id", help="ID форум-канала")
+    parser.add_argument("guild_id", nargs="?", default=DEFAULT_GUILD_ID, help=f"ID сервера (по умолчанию: {DEFAULT_GUILD_ID})")
+    parser.add_argument("channel_id", nargs="?", default=DEFAULT_FORUM_CHANNEL_ID, help=f"ID форум-канала (по умолчанию: {DEFAULT_FORUM_CHANNEL_ID})")
     parser.add_argument("-o", "--output", default="discord_forum_export", help="Папка экспорта")
     parser.add_argument("--profile", default=".discord_browser_profile", help="Локальный профиль Chromium для сессии Discord")
     parser.add_argument("--max-scrolls", type=int, default=250, help="Лимит прокруток на форум/публикацию")
