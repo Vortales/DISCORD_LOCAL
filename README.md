@@ -18,4 +18,4 @@ python discord_forum_collect.py [GUILD_ID] [FORUM_CHANNEL_ID] --workers 4
 
 Default IDs are `1514607659758653560` (server) and `1515423283606982776` (forum channel). Single-post test mode uses `--post-id POST_ID`.
 
-Exports are written under `discord_forum_export/` by default. Voter names, IDs, and roles are recorded only when Discord visibly exposes them to the signed-in account; information Discord hides cannot be recovered or inferred.
+Exports are written under `discord_forum_export/` by default. Poll messages include `poll_voter_details`, with the detected count link, its URL, navigation result, visible user rows, and failure status; each post also includes a concise `poll_voter_diagnostics` summary. Voter names, IDs, and roles are recorded only when Discord visibly exposes them to the signed-in account; information Discord hides cannot be recovered or inferred.

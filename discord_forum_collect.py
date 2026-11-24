@@ -164,7 +164,6 @@ THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
 
 VOTER_VIEW_SCRIPT = r"""() => {
   const overlays = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]')];
-  const hasOverlay = overlays.length > 0;
   const root = overlays[overlays.length - 1] || document.body;
   const users = [...root.querySelectorAll('[data-user-id], [class*="username" i]')].map(el => ({
     id: el.getAttribute('data-user-id'),
@@ -175,11 +174,38 @@ VOTER_VIEW_SCRIPT = r"""() => {
   const roles = [...root.querySelectorAll('[class*="role" i]')]
     .map(el => (el.innerText || el.getAttribute('aria-label') || '').trim()).filter(Boolean);
   return {
-    has_overlay: hasOverlay,
-    overlay_text: (root.innerText || '').trim().slice(-10000),
+    url: location.href,
+    title: document.title,
+    has_overlay: overlays.length > 0,
+    overlay_text: (root.innerText || '').trim().slice(-12000),
+    page_text: (document.body?.innerText || '').trim().slice(-12000),
     users: [...new Map(users.map(user => [`${user.id || ''}:${user.name}`, user])).values()],
     roles: [...new Set(roles)]
   };
+}"""
+
+POLL_TARGETS_SCRIPT = r"""(root, arg) => {
+  const controls = [...root.querySelectorAll('a[href], button, [role="button"]')];
+  const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+  const countPattern = /^\d+\s+(?:голос(?:а|ов)?|votes?)(?:\s*[,·•-]?\s*\d+(?:[.,]\d+)?\s*%)?$/i;
+  const matches = [];
+  const visibleControls = [];
+  for (const el of controls) {
+    const label = normalize(el.innerText) || normalize(el.getAttribute('aria-label')) || normalize(el.title);
+    const visible = !!(el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    const kind = /просмотреть опрос|view poll/i.test(label) ? 'view_poll'
+      : countPattern.test(label) ? 'vote_count' : null;
+    visibleControls.push({
+      tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), label: label.slice(0, 240),
+      href: el.href || null, target: el.getAttribute('target'), visible, disabled: !!el.disabled
+    });
+    if (!kind || !visible) continue;
+    const index = matches.length;
+    const key = `scraper-poll-${arg.key}-${index}`;
+    el.setAttribute('data-scraper-poll-target', key);
+    matches.push({key, index, kind, label, tag: el.tagName.toLowerCase(), href: el.href || null, target: el.getAttribute('target')});
+  }
+  return {targets: matches, controls: visibleControls};
 }"""
 
 THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
@@ -546,109 +572,210 @@ async def collect_messages(page: Page, max_scrolls: int) -> list[dict]:
     return sorted(gathered.values(), key=lambda m: (m.get("timestamp") or "", m["message_id"]))
 
 
-async def inspect_poll_voters(page: Page, messages: list[dict[str, Any]]) -> None:
-    """Inspect only visible poll controls; never click a live answer option."""
+async def inspect_poll_voters(
+    page: Page,
+    context: BrowserContext,
+    messages: list[dict[str, Any]],
+    max_scrolls: int,
+) -> list[dict[str, Any]]:
+    """Inspect vote-count links and view controls without selecting poll answers; return detailed diagnostics."""
+    diagnostics: list[dict[str, Any]] = []
     sequence = 0
     for message in messages:
         text = message.get("text", "")
-        if not re.search(r"опрос|poll|голос", text, re.IGNORECASE):
+        poll_text = "\n".join([text, *(p.get("text", "") for p in message.get("polls", []))])
+        if not message.get("polls") and not re.search(r"опрос|poll|голос|vote", poll_text, re.IGNORECASE):
             continue
+        sequence += 1
         dom_id = message.get("dom_id")
+        event: dict[str, Any] = {
+            "message_id": message.get("message_id"),
+            "dom_id": dom_id,
+            "message_text_preview": text[:1200],
+            "status": "started",
+            "targets": [],
+        }
         if not dom_id:
+            event.update(status="missing_message_dom_id", error="The message extractor returned no DOM identifier.")
+            diagnostics.append(event)
+            message["poll_voter_details"] = event
+            print(f"[poll-voters] message {message.get('message_id')}: no DOM identifier")
             continue
-        completed = bool(re.search(r"опрос.*(?:заверш[её]н|закрыт)|poll.*ended", text, re.IGNORECASE))
-        root = page.locator(f'[id="{dom_id}"]')
+
+        # MESSAGE_SCRIPT stores data-list-item-id as dom_id on Discord; it is not necessarily an element id.
+        selector = f'[data-list-item-id="{dom_id}"], [data-message-id="{dom_id}"], [id="{dom_id}"]'
+        root = page.locator(selector).first
         try:
-            if not await root.count():
+            root_count = await page.locator(selector).count()
+            scroll_steps = 0
+            while not root_count and scroll_steps < max(1, min(max_scrolls, 250)):
+                await page.evaluate(
+                    """() => {
+                      const scroller = (%s)();
+                      scroller.scrollTop += Math.max(280, Math.floor(scroller.clientHeight * 0.72));
+                    }""" % MESSAGE_SCROLLER_SCRIPT
+                )
+                scroll_steps += 1
+                await page.wait_for_timeout(260)
+                root_count = await page.locator(selector).count()
+            event["root_lookup"] = {
+                "selector": selector,
+                "matches": root_count,
+                "scroll_steps": scroll_steps,
+                "page_url": page.url,
+            }
+            if not root_count:
+                event.update(
+                    status="message_root_not_found",
+                    error="Message was in the collected snapshot but its live DOM node was not found after scrolling.",
+                    visible_message_root_count=await page.locator(
+                        '[data-list-item-id*="chat-messages"], [data-message-id], [id^="chat-messages-"]'
+                    ).count(),
+                )
+                diagnostics.append(event)
+                message["poll_voter_details"] = event
+                print(f"[poll-voters] message {message.get('message_id')}: DOM node not found after {scroll_steps} scrolls")
                 continue
-            sequence += 1
-            targets = await root.evaluate(
-                """(root, arg) => {
-                  const all = [...root.querySelectorAll('button, [role="button"]')];
-                  const found = [];
-                  for (const el of all) {
-                    const label = (el.innerText || el.getAttribute('aria-label') || el.title || '').replace(/\\s+/g, ' ').trim();
-                    const isView = /просмотреть опрос|view poll/i.test(label);
-                    const isCount = /^[0-9]+\\s+(?:голос|голоса|голосов|vote|votes)$/i.test(label);
-                    if (!isView && !(arg.completed && isCount)) continue;
-                    const key = `voter-${arg.key}-${found.length}`;
-                    el.setAttribute('data-scraper-voter-target', key);
-                    found.push({key, label, kind: isView ? 'view_poll' : 'vote_count'});
-                  }
-                  return found;
-                }""",
-                {"key": str(sequence), "completed": completed},
+
+            await root.scroll_into_view_if_needed(timeout=3500)
+            extracted = await root.evaluate(POLL_TARGETS_SCRIPT, {"key": str(sequence)})
+            targets = extracted.get("targets", [])
+            event["visible_controls"] = extracted.get("controls", [])
+            event["target_count"] = len(targets)
+            if not targets:
+                event.update(
+                    status="no_count_or_view_controls",
+                    error="No visible link/button had an exact vote-count label or a View Poll label.",
+                )
+                diagnostics.append(event)
+                message["poll_voter_details"] = event
+                print(f"[poll-voters] message {message.get('message_id')}: no matching count/view controls")
+                continue
+
+            print(
+                f"[poll-voters] message {message.get('message_id')}: found {len(targets)} safe control(s) "
+                f"after {scroll_steps} scrolls"
             )
-            message_details: list[dict[str, Any]] = []
             for target in targets:
-                button = page.locator(f'[data-scraper-voter-target="{target["key"]}"]')
+                item: dict[str, Any] = {
+                    "label": target.get("label"),
+                    "kind": target.get("kind"),
+                    "tag": target.get("tag"),
+                    "href": target.get("href"),
+                    "link_target": target.get("target"),
+                    "clicked": False,
+                }
+                event["targets"].append(item)
                 try:
-                    await button.scroll_into_view_if_needed(timeout=2500)
+                    # Re-tag after each click because a vote-count link may navigate or open a separate page.
+                    refreshed = await root.evaluate(POLL_TARGETS_SCRIPT, {"key": f"{sequence}-refresh"})
+                    current = next(
+                        (candidate for candidate in refreshed.get("targets", [])
+                         if candidate.get("index") == target.get("index")
+                         and candidate.get("kind") == target.get("kind")
+                         and candidate.get("label") == target.get("label")),
+                        None,
+                    )
+                    item["controls_before_click"] = refreshed.get("controls", [])
+                    if current is None:
+                        item.update(status="control_missing_on_recheck", error="Control disappeared before it could be clicked.")
+                        continue
+                    control = page.locator(f'[data-scraper-poll-target="{current["key"]}"]')
+                    await control.scroll_into_view_if_needed(timeout=3000)
+                    before_url = page.url
+                    before_pages = list(context.pages)
                     baseline = await page.evaluate(VOTER_VIEW_SCRIPT)
-                    await button.hover(timeout=2500)
-                    await page.wait_for_timeout(350)
-                    hovered = await page.evaluate(VOTER_VIEW_SCRIPT)
-                    baseline_users = {u.get("id") or u.get("name") for u in baseline.get("users", [])}
-                    new_users = [u for u in hovered.get("users", []) if (u.get("id") or u.get("name")) not in baseline_users]
-                    clicked = False
-                    result = hovered
-                    if target["kind"] == "view_poll" or (completed and not new_users):
-                        # "View poll" is read-only; vote-count controls are clicked only after the poll is closed.
-                        await button.click(timeout=2500)
-                        clicked = True
+                    item["url_before"] = before_url
+                    item["baseline_overlay"] = baseline.get("has_overlay")
+                    item["baseline_user_count"] = len(baseline.get("users", []))
+                    print(
+                        f"[poll-voters] clicking {target.get('kind')} {target.get('label')!r} "
+                        f"tag={target.get('tag')} href={target.get('href')!r}"
+                    )
+                    await control.click(timeout=4000)
+                    item["clicked"] = True
+                    if target.get("target") == "_blank":
                         await page.wait_for_timeout(500)
-                        result = await page.evaluate(VOTER_VIEW_SCRIPT)
-                        result["new_users_vs_baseline"] = [
-                            u for u in result.get("users", [])
-                            if (u.get("id") or u.get("name")) not in baseline_users
-                        ]
-                    message_details.append({
-                        "label": target["label"],
-                        "control": target["kind"],
-                        "completed_poll": completed,
-                        "clicked_view_only_control": clicked,
-                        "result": result,
-                    })
-                    if clicked and target["kind"] == "view_poll" and completed:
-                        modal_counts = await page.evaluate("""() => {
-                          const overlay = document.querySelector('[role="dialog"], [aria-modal="true"]') || document.body;
-                          return [...overlay.querySelectorAll('button, [role="button"]')].map((el, i) => {
-                            const label = (el.innerText || el.getAttribute('aria-label') || el.title || '').replace(/\\s+/g, ' ').trim();
-                            if (!/^[0-9]+\\s+(?:голос|голоса|голосов|vote|votes)$/i.test(label)) return null;
-                            const key = `modal-voter-${i}`;
-                            el.setAttribute('data-scraper-voter-target', key);
-                            return {key, label};
-                          }).filter(Boolean);
-                        }""")
-                        for modal_count in modal_counts:
-                            count_button = page.locator(f'[data-scraper-voter-target="{modal_count["key"]}"]')
-                            try:
-                                await count_button.hover(timeout=1800)
-                                await page.wait_for_timeout(250)
-                                modal_before = await page.evaluate(VOTER_VIEW_SCRIPT)
-                                await count_button.click(timeout=1800)
-                                await page.wait_for_timeout(400)
-                                modal_result = await page.evaluate(VOTER_VIEW_SCRIPT)
-                                message_details.append({
-                                    "label": modal_count["label"],
-                                    "control": "completed_poll_modal_vote_count",
-                                    "completed_poll": True,
-                                    "clicked_view_only_control": True,
-                                    "result": modal_result,
-                                    "baseline_user_count": len(modal_before.get("users", [])),
-                                })
-                                await page.keyboard.press("Escape")
-                            except Exception as exc:
-                                message_details.append({"label": modal_count["label"], "error": str(exc)})
-                    if clicked:
-                        await page.keyboard.press("Escape")
-                        await page.wait_for_timeout(150)
+                    else:
+                        try:
+                            await page.wait_for_function(
+                                """before => {
+                                  const body = (document.body?.innerText || '').trim().slice(-12000);
+                                  const overlays = document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]').length;
+                                  return location.href !== before.url || body !== before.text
+                                    || overlays > before.overlay_count;
+                                }""",
+                                arg={
+                                    "url": before_url,
+                                    "text": baseline.get("page_text", ""),
+                                    "overlay_count": int(bool(baseline.get("has_overlay"))),
+                                },
+                                timeout=3000,
+                            )
+                            item["same_page_change_detected"] = True
+                        except Exception as exc:
+                            item["same_page_change_detected"] = False
+                            item["same_page_wait_error"] = str(exc)
+                    opened_pages = [candidate for candidate in context.pages if candidate not in before_pages]
+                    result_pages: list[dict[str, Any]] = []
+                    for result_page in ([page] if not page.is_closed() else []) + opened_pages:
+                        try:
+                            if result_page is not page:
+                                try:
+                                    await result_page.wait_for_load_state("domcontentloaded", timeout=3500)
+                                except Exception:
+                                    pass
+                                await result_page.wait_for_timeout(350)
+                            result = await result_page.evaluate(VOTER_VIEW_SCRIPT)
+                            baseline_keys = {u.get("id") or u.get("name") for u in baseline.get("users", [])}
+                            result["new_users_vs_baseline"] = [
+                                u for u in result.get("users", [])
+                                if (u.get("id") or u.get("name")) not in baseline_keys
+                            ]
+                            result["source_page"] = "same_page" if result_page is page else "opened_page"
+                            result_pages.append(result)
+                        except Exception as exc:
+                            result_pages.append({"source_page": "capture_error", "url": getattr(result_page, "url", None), "error": str(exc)})
+                    item["url_after"] = page.url if not page.is_closed() else None
+                    item["opened_page_count"] = len(opened_pages)
+                    item["results"] = result_pages
+                    item["status"] = "captured" if result_pages else "clicked_but_no_page_capture"
+                    user_count = sum(len(result.get("users", [])) for result in result_pages)
+                    print(
+                        f"[poll-voters] result for {target.get('label')!r}: pages={len(result_pages)}, "
+                        f"visible_user_rows={user_count}, url={item.get('url_after')!r}"
+                    )
+
+                    # Close popups after recording their visible content; restore same-tab navigation if it occurred.
+                    for opened_page in opened_pages:
+                        try:
+                            await opened_page.close()
+                        except Exception:
+                            pass
+                    if not page.is_closed() and page.url != before_url:
+                        try:
+                            await page.go_back(wait_until="domcontentloaded", timeout=6000)
+                            await page.wait_for_timeout(400)
+                            item["restored_original_page"] = page.url == before_url
+                        except Exception as exc:
+                            item["restore_error"] = str(exc)
+                    elif not page.is_closed():
+                        try:
+                            await page.keyboard.press("Escape")
+                        except Exception:
+                            pass
                 except Exception as exc:
-                    message_details.append({"label": target["label"], "error": str(exc)})
-            if message_details:
-                message["poll_voter_details"] = message_details
+                    item.update(status="inspection_error", error=str(exc))
+                    print(f"[poll-voters] control {target.get('label')!r} failed: {exc}")
+            event["status"] = "controls_inspected"
+            diagnostics.append(event)
+            message["poll_voter_details"] = event
         except Exception as exc:
-            message["poll_voter_inspection_error"] = str(exc)
+            event.update(status="inspection_error", error=str(exc))
+            diagnostics.append(event)
+            message["poll_voter_details"] = event
+            print(f"[poll-voters] message {message.get('message_id')} failed: {exc}")
+    return diagnostics
 
 
 def attachment_filename(url: str, label: str, thread_id: str, message_id: str, index: int) -> str:
@@ -727,6 +854,7 @@ async def scrape_one_post(
             "url": post.get("url"),
             "messages": [],
             "thread_snapshot": None,
+            "poll_voter_diagnostics": [],
             "poll_voter_visibility_note": (
                 "Only voter names/IDs/roles visibly rendered by Discord to this logged-in account can be captured. "
                 "Discord-hidden voters or details are unavailable and are not inferred."
@@ -750,7 +878,34 @@ async def scrape_one_post(
             for message in messages:
                 message["thread_id"] = post["id"]
             if args.inspect_voters:
-                await inspect_poll_voters(page, messages)
+                poll_events = await inspect_poll_voters(page, context, messages, args.max_scrolls)
+                record["poll_voter_diagnostics"] = [
+                    {
+                        "message_id": event.get("message_id"),
+                        "status": event.get("status"),
+                        "root_lookup": event.get("root_lookup"),
+                        "target_count": event.get("target_count", len(event.get("targets", []))),
+                        "targets": [
+                            {
+                                "label": target.get("label"),
+                                "kind": target.get("kind"),
+                                "clicked": target.get("clicked"),
+                                "status": target.get("status"),
+                                "href": target.get("href"),
+                                "url_after": target.get("url_after"),
+                                "opened_page_count": target.get("opened_page_count"),
+                                "visible_user_rows": sum(
+                                    len(result.get("users", [])) for result in target.get("results", [])
+                                ),
+                            }
+                            for target in event.get("targets", [])
+                        ],
+                        "error": event.get("error"),
+                    }
+                    for event in poll_events
+                ]
+            else:
+                record["poll_voter_diagnostics"] = [{"status": "disabled_by_user", "message": "Voter inspection was disabled."}]
             record["title"] = record.get("title") or await page.title()
             record["messages"] = messages
             if not messages:
