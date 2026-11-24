@@ -125,30 +125,48 @@ THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
   );
   for (const card of cards) {
     const attrs = [...card.attributes].map(a => `${a.name}=${a.value}`).join(' ');
+    const listItemId = card.getAttribute('data-list-item-id') || '';
     const directId = card.getAttribute('data-post-id');
-    if (!directId && !/forum|post/i.test(attrs)) continue;
-    const routePrefix = `/channels/${guild}/${channel}/`;
-    const routeIndex = attrs.indexOf(routePrefix);
-    const routeTail = routeIndex >= 0 ? attrs.slice(routeIndex + routePrefix.length) : '';
-    const routeId = routeTail.match(/^[0-9]{16,22}/);
-    let postId = routeId ? routeId[0] : null;
+    const marker = `forum-channel-list-${channel}___`;
+    let postId = listItemId.startsWith(marker) ? listItemId.slice(marker.length) : null;
     if (!postId) {
-      const idMatch = (directId || attrs).match(/[0-9]{16,22}/);
-      if (idMatch) postId = idMatch[0];
+      const routePrefix = `/channels/${guild}/${channel}/`;
+      const routeIndex = attrs.indexOf(routePrefix);
+      const routeTail = routeIndex >= 0 ? attrs.slice(routeIndex + routePrefix.length) : '';
+      const routeId = routeTail.match(/^[0-9]{16,22}/);
+      postId = routeId ? routeId[0] : null;
     }
-    if (!postId || found.has(postId)) continue;
-    const timeEl = card.querySelector('time[datetime]');
-    const authorEl = card.querySelector('[id^="message-username-"], [class*="username"]');
-    const authorNode = authorEl?.closest('[data-user-id]') || card.querySelector('[data-user-id]');
+    if (!postId && directId && /^[0-9]{16,22}$/.test(directId)) postId = directId;
+    if (!postId) {
+      const explicitPost = `${card.id} ${listItemId}`.match(/(?:forum[-_]?post|post)[^0-9]{0,12}([0-9]{16,22})/i);
+      if (explicitPost) postId = explicitPost[1];
+    }
+    if (!postId || !/^[0-9]{16,22}$/.test(postId) || found.has(postId)) continue;
+
+    // The forum list item itself is a zero-text focus target; climb to its card.
+    let container = card;
+    for (let parent = card.parentElement; parent && parent !== document.body; parent = parent.parentElement) {
+      if (parent.querySelectorAll(`[data-list-item-id^="${marker}"]`).length > 1) break;
+      const text = (parent.innerText || '').trim();
+      if (text.length > 4000) break;
+      if (text.length > 0) container = parent;
+      if (parent.querySelector('time[datetime]') && text.length > 20) {
+        container = parent;
+        break;
+      }
+    }
+    const timeEl = container.querySelector('time[datetime]');
+    const authorEl = container.querySelector('[id^="message-username-"], [class*="username"]');
+    const authorNode = authorEl?.closest('[data-user-id]') || container.querySelector('[data-user-id]');
     found.set(postId, {
       id: postId,
       url: `https://discord.com/channels/${guild}/${channel}/${postId}`,
-      title: (card.querySelector('h1, h2, h3, [role="heading"]')?.innerText || '').trim(),
+      title: (container.querySelector('h1, h2, h3, [role="heading"]')?.innerText || '').trim(),
       author: authorEl ? (authorEl.innerText || '').trim() : null,
       author_id: authorNode?.getAttribute('data-user-id') || null,
       created_at: timeEl ? timeEl.dateTime : null,
-      preview_text: (card.innerText || '').trim().slice(0, 4000),
-      tags: [...new Set([...card.querySelectorAll('[class*="tag"]')].map(tag => (tag.innerText || '').trim()).filter(Boolean))]
+      preview_text: (container.innerText || '').trim().slice(0, 4000),
+      tags: [...new Set([...container.querySelectorAll('[class*="tag"]')].map(tag => (tag.innerText || '').trim()).filter(Boolean))]
     });
   }
   return [...found.values()];
@@ -391,7 +409,7 @@ async def main_async(args: argparse.Namespace) -> None:
             await page.wait_for_function(
                 "([guild, channel]) => location.pathname.startsWith(`/channels/${guild}/${channel}`) "
                 "&& !document.querySelector('input[type=\\\"password\\\"]') "
-                "&& !!document.querySelector('main') "
+                "&& !!document.querySelector('main, [role=\\\"main\\\"], #app-mount') "
                 "&& (document.body.innerText || '').trim().length > 80",
                 arg=[guild_id, channel_id],
                 timeout=args.wait_timeout * 1000,
