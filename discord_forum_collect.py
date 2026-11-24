@@ -421,15 +421,37 @@ async def open_forum_post(
         {},
     )
     await locator.scroll_into_view_if_needed()
-    await locator.click()
+    # The data-list-item is an empty focus target; click the nearest ancestor containing the card text.
+    await locator.evaluate("""el => {
+      let target = el;
+      for (let i = 0; i < 6 && target; i++, target = target.parentElement) {
+        if ((target.innerText || '').trim().length > 10) {
+          target.click();
+          return;
+        }
+      }
+      el.click();
+    }""")
+    await page.wait_for_timeout(900)
+    if not await page.evaluate("postId => location.pathname.endsWith('/' + postId)", post_id):
+        try:
+            await locator.focus()
+            await locator.press("Enter", timeout=3000)
+        except Exception:
+            pass
     try:
         await page.wait_for_function(
-            "postId => location.pathname.endsWith('/' + postId)", arg=post_id, timeout=20_000
+            "postId => location.pathname.endsWith('/' + postId)", arg=post_id, timeout=12_000
         )
-    except PlaywrightTimeoutError:
-        # Some client builds open the post pane without changing the route.
-        await page.wait_for_timeout(2500)
-    await page.wait_for_timeout(1800)
+    except PlaywrightTimeoutError as exc:
+        bundle = await save_debug_bundle(
+            page, output_dir, f"Click did not open forum post {post_id}", guild_id, channel_id, browser_errors
+        )
+        raise RuntimeError(
+            f"Карточка {post_id} найдена, но Discord не открыл публикацию после клика. "
+            f"Архив диагностики: {bundle}"
+        ) from exc
+    await page.wait_for_timeout(2200)
     return metadata
 
 
