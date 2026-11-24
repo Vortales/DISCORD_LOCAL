@@ -321,6 +321,37 @@ MESSAGE_SCROLLER_SCRIPT = r"""() => {
   return candidates[0] || document.scrollingElement || document.documentElement;
 }"""
 
+THREAD_ONLY_SCROLL_SCRIPT = r"""() => {
+  const selector = '[data-list-id*="chat-messages"], [id^="chat-messages-"], [data-list-item-id*="chat-messages"]';
+  const markers = [...document.querySelectorAll(selector)];
+  if (!markers.length) return {ok: false, reason: 'no_thread_message_markers', marker_count: 0};
+  let scroller = null;
+  for (const marker of markers) {
+    for (let el = marker; el && el !== document.body; el = el.parentElement) {
+      const style = getComputedStyle(el);
+      if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) {
+        scroller = el;
+        break;
+      }
+    }
+    if (scroller) break;
+  }
+  if (!scroller) return {ok: false, reason: 'thread_scroller_not_found', marker_count: markers.length};
+  const before = scroller.scrollTop;
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  scroller.scrollTop = Math.min(max, before + Math.max(280, Math.floor(scroller.clientHeight * 0.65)));
+  return {
+    ok: scroller.scrollTop !== before,
+    reason: scroller.scrollTop !== before ? 'scrolled_thread_only' : 'thread_scroll_at_end',
+    marker_count: markers.length,
+    before,
+    after: scroller.scrollTop,
+    max,
+    scroller_id: scroller.id || null,
+    scroller_class: typeof scroller.className === 'string' ? scroller.className.slice(0, 160) : ''
+  };
+}"""
+
 
 def safe_name(value: str, fallback: str) -> str:
     value = unquote(value).strip()
@@ -640,7 +671,20 @@ async def inspect_poll_voters(
         try:
             root_count = await page.locator(selector).count()
             scroll_steps = 0
-            while not root_count and scroll_steps < max(1, min(max_scrolls, 60)):
+            scroll_attempts: list[dict[str, Any]] = []
+            if not root_count:
+                event["restored_post_before_search"] = True
+                try:
+                    await restore_post()
+                    root_count = await page.locator(selector).count()
+                except Exception as exc:
+                    event.update(
+                        status="post_restore_failed_before_search",
+                        restore_error=str(exc),
+                        current_url=page.url,
+                    )
+                    print(f"[poll-voters] failed to refresh post before looking for message {message.get('message_id')}: {exc}")
+            while not root_count and scroll_steps < max(1, min(max_scrolls, 20)):
                 if not await is_target_post_open(page, post_id, messages):
                     event.update(
                         status="left_target_post_during_lookup",
@@ -648,15 +692,14 @@ async def inspect_poll_voters(
                         current_url=page.url,
                     )
                     break
-                await page.evaluate(
-                    """() => {
-                      const scroller = (%s)();
-                      scroller.scrollTop += Math.max(280, Math.floor(scroller.clientHeight * 0.72));
-                    }""" % MESSAGE_SCROLLER_SCRIPT
-                )
+                scroll_state = await page.evaluate(THREAD_ONLY_SCROLL_SCRIPT)
+                scroll_attempts.append(scroll_state)
+                if not scroll_state.get("ok"):
+                    break
                 scroll_steps += 1
                 await page.wait_for_timeout(260)
                 root_count = await page.locator(selector).count()
+            event["thread_scroll_attempts"] = scroll_attempts
             event["root_lookup"] = {
                 "selector": selector,
                 "matches": root_count,
@@ -674,7 +717,8 @@ async def inspect_poll_voters(
                 ).count()
                 diagnostics.append(event)
                 message["poll_voter_details"] = event
-                print(f"[poll-voters] message {message.get('message_id')}: DOM node not found after {scroll_steps} scrolls")
+                event["page_text_preview"] = await page.evaluate("() => (document.body?.innerText || '').trim().slice(-2500)")
+                print(f"[poll-voters] message {message.get('message_id')}: DOM node not found after {scroll_steps} thread-only scrolls; {scroll_attempts[-1] if scroll_attempts else 'no thread scroll attempted'}")
                 continue
 
             await root.scroll_into_view_if_needed(timeout=3500)
