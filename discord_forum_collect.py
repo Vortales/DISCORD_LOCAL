@@ -572,6 +572,20 @@ async def collect_messages(page: Page, max_scrolls: int) -> list[dict]:
     return sorted(gathered.values(), key=lambda m: (m.get("timestamp") or "", m["message_id"]))
 
 
+async def is_target_post_open(page: Page, post_id: str, messages: list[dict[str, Any]]) -> bool:
+    """Accept either the post URL or an inline thread view that still contains one of its message nodes."""
+    if urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+        return True
+    for message in messages:
+        dom_id = message.get("dom_id")
+        if not dom_id:
+            continue
+        selector = f'[data-list-item-id="{dom_id}"], [data-message-id="{dom_id}"], [id="{dom_id}"]'
+        if await page.locator(selector).count():
+            return True
+    return False
+
+
 async def inspect_poll_voters(
     page: Page,
     context: BrowserContext,
@@ -597,7 +611,7 @@ async def inspect_poll_voters(
             "status": "started",
             "targets": [],
         }
-        if not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+        if not await is_target_post_open(page, post_id, messages):
             event.update(
                 status="left_target_post_before_inspection",
                 error=f"The browser left post {post_id}; voter scanning stopped rather than scrolling another route.",
@@ -627,7 +641,7 @@ async def inspect_poll_voters(
             root_count = await page.locator(selector).count()
             scroll_steps = 0
             while not root_count and scroll_steps < max(1, min(max_scrolls, 60)):
-                if not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+                if not await is_target_post_open(page, post_id, messages):
                     event.update(
                         status="left_target_post_during_lookup",
                         error="The browser left the target post during DOM lookup; scrolling was stopped.",
@@ -778,11 +792,11 @@ async def inspect_poll_voters(
                             await opened_page.close()
                         except Exception:
                             pass
-                    if not page.is_closed() and not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+                    if not page.is_closed() and not await is_target_post_open(page, post_id, messages):
                         try:
                             print(f"[poll-voters] restoring target post {post_id} from {page.url}")
                             await restore_post()
-                            item["restored_target_post"] = urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}")
+                            item["restored_target_post"] = await is_target_post_open(page, post_id, messages)
                             item["url_after_restore"] = page.url
                             if not item["restored_target_post"]:
                                 event["status"] = "target_post_restore_failed"
@@ -950,7 +964,7 @@ async def scrape_one_post(
                 ]
             else:
                 record["poll_voter_diagnostics"] = [{"status": "disabled_by_user", "message": "Voter inspection was disabled."}]
-            if not urlparse(page.url).path.rstrip("/").endswith(f"/{post['id']}"):
+            if not await is_target_post_open(page, post["id"], messages):
                 print(f"[poll-voters] final safety restore to post {post['id']} from {page.url}")
                 try:
                     await restore_target_post()
