@@ -200,12 +200,17 @@ POLL_OVERLAY_TARGETS_SCRIPT = r"""(arg) => {
   for (const el of interactive) {
     const label = normalize(el.innerText) || normalize(el.getAttribute('aria-label')) || normalize(el.title);
     const visible = !!(el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
-    controls.push({tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), label: label.slice(0, 240), visible});
+    const className = typeof el.className === 'string' ? el.className : '';
+    const selected = el.getAttribute('aria-selected') === 'true'
+      || el.getAttribute('aria-pressed') === 'true'
+      || el.getAttribute('aria-checked') === 'true'
+      || /(?:^|\s)(?:selected|active)(?:\s|$)/i.test(className);
+    controls.push({tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), label: label.slice(0, 240), visible, selected});
     if (!visible || (!countPattern.test(label) && !optionCountPattern.test(label))) continue;
     const index = targets.length;
     const key = `scraper-poll-option-${arg.key}-${index}`;
     el.setAttribute('data-scraper-poll-option', key);
-    targets.push({key, index, label, tag: el.tagName.toLowerCase(), role: el.getAttribute('role')});
+    targets.push({key, index, label, tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), selected});
   }
   return {has_overlay: true, controls, targets};
 }"""
@@ -829,9 +834,17 @@ async def inspect_poll_voters(
                 print(f"[poll-voters] message {message.get('message_id')}: no matching count/view controls")
                 continue
 
+            positive_count_targets = [
+                candidate for candidate in targets
+                if candidate.get("kind") == "vote_count"
+                and int((re.match(r"\s*(\d+)", candidate.get("label", "")) or [None, "0"])[1]) > 0
+            ]
+            preferred_count_target = positive_count_targets[-1] if positive_count_targets else None
+            event["count_controls_found"] = sum(target.get("kind") == "vote_count" for target in targets)
+            event["count_controls_clicked"] = 0
             print(
                 f"[poll-voters] message {message.get('message_id')}: found {len(targets)} safe control(s) "
-                f"after {scroll_steps} scrolls"
+                f"after {scroll_steps} scrolls; will open one positive result-count control"
             )
             for target in targets:
                 item: dict[str, Any] = {
@@ -843,6 +856,21 @@ async def inspect_poll_voters(
                     "clicked": False,
                 }
                 event["targets"].append(item)
+                if target.get("kind") == "vote_count":
+                    count_match = re.match(r"\s*(\d+)", target.get("label", ""))
+                    vote_count = int(count_match.group(1)) if count_match else 0
+                    if vote_count == 0:
+                        item.update(status="skipped_zero_votes", reason="A zero-vote option has no voters to enumerate.")
+                        print(f"[poll-voters] skipping zero-vote control {target.get('label')!r}")
+                        continue
+                    if preferred_count_target is None or target.get("index") != preferred_count_target.get("index"):
+                        item.update(
+                            status="skipped_redundant_option_count",
+                            reason="The final positive result-count control opens the overlay with all answer options.",
+                        )
+                        print(f"[poll-voters] skipping redundant count {target.get('label')!r}")
+                        continue
+                    event["count_controls_clicked"] += 1
                 try:
                     # Re-tag after each click because a vote-count link may navigate or open a separate page.
                     refreshed = await root.evaluate(POLL_TARGETS_SCRIPT, {"key": f"{sequence}-refresh"})
@@ -903,7 +931,7 @@ async def inspect_poll_voters(
                                 except Exception:
                                     pass
                                 await result_page.wait_for_timeout(350)
-                            result = await result_page.evaluate(VOTER_VIEW_SCRIPT)
+                            result = await capture_overlay_voters(result_page)
                             baseline_keys = {u.get("id") or u.get("name") for u in baseline.get("users", [])}
                             result["new_users_vs_baseline"] = [
                                 u for u in result.get("users", [])
@@ -932,6 +960,24 @@ async def inspect_poll_voters(
                             f"{[control.get('label') for control in item['overlay_controls']]}"
                         )
                         for option in overlay_info.get("targets", []):
+                            option_count_match = re.search(r"\((\d+)\)\s*$", option.get("label", "")) or re.match(
+                                r"\s*(\d+)", option.get("label", "")
+                            )
+                            option_votes = int(option_count_match.group(1)) if option_count_match else None
+                            if option_votes == 0:
+                                item["overlay_voter_lists"].append({
+                                    "label": option.get("label"),
+                                    "status": "skipped_zero_votes",
+                                    "visible_user_rows": 0,
+                                })
+                                continue
+                            if option.get("selected"):
+                                item["overlay_voter_lists"].append({
+                                    "label": option.get("label"),
+                                    "status": "already_selected_and_captured",
+                                    "visible_user_rows": len(result_pages[0].get("users", [])) if result_pages else 0,
+                                })
+                                continue
                             refreshed_options = await page.evaluate(
                                 POLL_OVERLAY_TARGETS_SCRIPT,
                                 {"key": f"{sequence}-{target.get('index', 0)}-refresh"},
