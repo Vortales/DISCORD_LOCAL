@@ -30,6 +30,7 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -161,6 +162,26 @@ THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
   };
 }"""
 
+VOTER_VIEW_SCRIPT = r"""() => {
+  const overlays = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]')];
+  const hasOverlay = overlays.length > 0;
+  const root = overlays[overlays.length - 1] || document.body;
+  const users = [...root.querySelectorAll('[data-user-id], [class*="username" i]')].map(el => ({
+    id: el.getAttribute('data-user-id'),
+    name: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim(),
+    roles: [...el.querySelectorAll('[class*="role" i]')]
+      .map(role => (role.innerText || role.getAttribute('aria-label') || '').trim()).filter(Boolean)
+  })).filter(x => x.name);
+  const roles = [...root.querySelectorAll('[class*="role" i]')]
+    .map(el => (el.innerText || el.getAttribute('aria-label') || '').trim()).filter(Boolean);
+  return {
+    has_overlay: hasOverlay,
+    overlay_text: (root.innerText || '').trim().slice(-10000),
+    users: [...new Map(users.map(user => [`${user.id || ''}:${user.name}`, user])).values()],
+    roles: [...new Set(roles)]
+  };
+}"""
+
 THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
   const prefix = `/channels/${guild}/${channel}/`;
   const found = new Map();
@@ -289,6 +310,7 @@ async def save_debug_bundle(
     guild_id: str,
     channel_id: str,
     browser_errors: list[str],
+    filename: str = "discord_forum_debug.zip",
 ) -> Path:
     """Save a single ZIP with a screenshot and non-secret page diagnostics."""
     screenshot: bytes | None = None
@@ -339,7 +361,7 @@ async def save_debug_bundle(
         "page": page_data,
         "privacy_note": "Contains a screenshot and short visible text snippets. It does not include cookies, tokens, local storage, or password values.",
     }
-    bundle_path = output_dir / "discord_forum_debug.zip"
+    bundle_path = output_dir / filename
     with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("diagnostics.json", json.dumps(report, ensure_ascii=False, indent=2))
         if screenshot is not None:
@@ -396,10 +418,15 @@ async def open_forum_post(
 ) -> dict[str, Any]:
     """Find a forum card in the list and click it; direct URL navigation alone only loads the list in some Discord builds."""
     channel_url = f"https://discord.com/channels/{guild_id}/{channel_id}"
-    await page.goto(channel_url, wait_until="domcontentloaded")
-    await page.wait_for_timeout(1800)
+    post_url = f"{channel_url}/{post_id}"
     list_item_id = f"forum-channel-list-{channel_id}___{post_id}"
     locator = page.locator(f'[data-list-item-id="{list_item_id}"]')
+    # Discord often loads the right list position for this route, but still requires a UI click to open the post.
+    await page.goto(post_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(1500)
+    if not await locator.count():
+        await page.goto(channel_url, wait_until="domcontentloaded")
+        await page.wait_for_timeout(1200)
 
     for _ in range(max_scrolls):
         if await locator.count():
@@ -411,7 +438,13 @@ async def open_forum_post(
         await page.wait_for_timeout(750)
     if not await locator.count():
         bundle = await save_debug_bundle(
-            page, output_dir, f"Target forum post {post_id} not found in the scrolled list", guild_id, channel_id, browser_errors
+            page,
+            output_dir,
+            f"Target forum post {post_id} not found in the scrolled list",
+            guild_id,
+            channel_id,
+            browser_errors,
+            filename=f"discord_forum_debug_{post_id}.zip",
         )
         raise RuntimeError(f"Не нашёл публикацию {post_id} в списке после прокрутки. Архив диагностики: {bundle}")
 
@@ -421,6 +454,30 @@ async def open_forum_post(
         {},
     )
     await locator.scroll_into_view_if_needed()
+    before_state = await page.evaluate("""() => {
+      const text = document.body?.innerText || '';
+      return {
+        path: location.pathname,
+        message_nodes: document.querySelectorAll('[id^="chat-messages-"], [data-message-id], [data-list-item-id*="chat-messages"]').length,
+        dialogs: document.querySelectorAll('[role="dialog"], [aria-modal="true"]').length,
+        text_length: text.length,
+        text_tail: text.slice(-1200)
+      };
+    }""")
+
+    async def detail_is_open() -> bool:
+        return await page.evaluate("""before => {
+          const text = document.body?.innerText || '';
+          const postId = %s;
+          const pathChangedToPost = !before.path.endsWith('/' + postId) && location.pathname.endsWith('/' + postId);
+          const messageNodes = document.querySelectorAll(
+            '[id^="chat-messages-"], [data-message-id], [data-list-item-id*="chat-messages"]'
+          ).length;
+          const dialogs = document.querySelectorAll('[role="dialog"], [aria-modal="true"]').length;
+          return pathChangedToPost || messageNodes > before.message_nodes || dialogs > before.dialogs
+            || Math.abs(text.length - before.text_length) > 100 || text.slice(-1200) !== before.text_tail;
+        }""" % json.dumps(post_id), before_state)
+
     # The data-list-item is an empty focus target; click the nearest ancestor containing the card text.
     await locator.evaluate("""el => {
       let target = el;
@@ -433,7 +490,7 @@ async def open_forum_post(
       el.click();
     }""")
     await page.wait_for_timeout(900)
-    if not await page.evaluate("postId => location.pathname.endsWith('/' + postId)", post_id):
+    if not await detail_is_open():
         try:
             await locator.focus()
             await locator.press("Enter", timeout=3000)
@@ -441,11 +498,26 @@ async def open_forum_post(
             pass
     try:
         await page.wait_for_function(
-            "postId => location.pathname.endsWith('/' + postId)", arg=post_id, timeout=12_000
+            """before => {
+              const text = document.body?.innerText || '';
+              const postId = %s;
+              return (!before.path.endsWith('/' + postId) && location.pathname.endsWith('/' + postId))
+                || document.querySelectorAll('[id^=\\\"chat-messages-\\\"], [data-message-id], [data-list-item-id*=\\\"chat-messages\\\"]').length > before.message_nodes
+                || document.querySelectorAll('[role=\\\"dialog\\\"], [aria-modal=\\\"true\\\"]').length > before.dialogs
+                || Math.abs(text.length - before.text_length) > 100 || text.slice(-1200) !== before.text_tail;
+            }""" % json.dumps(post_id),
+            arg=before_state,
+            timeout=12_000,
         )
     except PlaywrightTimeoutError as exc:
         bundle = await save_debug_bundle(
-            page, output_dir, f"Click did not open forum post {post_id}", guild_id, channel_id, browser_errors
+            page,
+            output_dir,
+            f"Click did not open forum post {post_id}",
+            guild_id,
+            channel_id,
+            browser_errors,
+            filename=f"discord_forum_debug_{post_id}.zip",
         )
         raise RuntimeError(
             f"Карточка {post_id} найдена, но Discord не открыл публикацию после клика. "
@@ -472,6 +544,111 @@ async def collect_messages(page: Page, max_scrolls: int) -> list[dict]:
         await page.evaluate("() => { const el = (%s)(); el.scrollTop = 0; }" % MESSAGE_SCROLLER_SCRIPT)
         await page.wait_for_timeout(900)
     return sorted(gathered.values(), key=lambda m: (m.get("timestamp") or "", m["message_id"]))
+
+
+async def inspect_poll_voters(page: Page, messages: list[dict[str, Any]]) -> None:
+    """Inspect only visible poll controls; never click a live answer option."""
+    sequence = 0
+    for message in messages:
+        text = message.get("text", "")
+        if not re.search(r"опрос|poll|голос", text, re.IGNORECASE):
+            continue
+        dom_id = message.get("dom_id")
+        if not dom_id:
+            continue
+        completed = bool(re.search(r"опрос.*(?:заверш[её]н|закрыт)|poll.*ended", text, re.IGNORECASE))
+        root = page.locator(f'[id="{dom_id}"]')
+        try:
+            if not await root.count():
+                continue
+            sequence += 1
+            targets = await root.evaluate(
+                """(root, arg) => {
+                  const all = [...root.querySelectorAll('button, [role="button"]')];
+                  const found = [];
+                  for (const el of all) {
+                    const label = (el.innerText || el.getAttribute('aria-label') || el.title || '').replace(/\\s+/g, ' ').trim();
+                    const isView = /просмотреть опрос|view poll/i.test(label);
+                    const isCount = /^[0-9]+\\s+(?:голос|голоса|голосов|vote|votes)$/i.test(label);
+                    if (!isView && !(arg.completed && isCount)) continue;
+                    const key = `voter-${arg.key}-${found.length}`;
+                    el.setAttribute('data-scraper-voter-target', key);
+                    found.push({key, label, kind: isView ? 'view_poll' : 'vote_count'});
+                  }
+                  return found;
+                }""",
+                {"key": str(sequence), "completed": completed},
+            )
+            message_details: list[dict[str, Any]] = []
+            for target in targets:
+                button = page.locator(f'[data-scraper-voter-target="{target["key"]}"]')
+                try:
+                    await button.scroll_into_view_if_needed(timeout=2500)
+                    baseline = await page.evaluate(VOTER_VIEW_SCRIPT)
+                    await button.hover(timeout=2500)
+                    await page.wait_for_timeout(350)
+                    hovered = await page.evaluate(VOTER_VIEW_SCRIPT)
+                    baseline_users = {u.get("id") or u.get("name") for u in baseline.get("users", [])}
+                    new_users = [u for u in hovered.get("users", []) if (u.get("id") or u.get("name")) not in baseline_users]
+                    clicked = False
+                    result = hovered
+                    if target["kind"] == "view_poll" or (completed and not new_users):
+                        # "View poll" is read-only; vote-count controls are clicked only after the poll is closed.
+                        await button.click(timeout=2500)
+                        clicked = True
+                        await page.wait_for_timeout(500)
+                        result = await page.evaluate(VOTER_VIEW_SCRIPT)
+                        result["new_users_vs_baseline"] = [
+                            u for u in result.get("users", [])
+                            if (u.get("id") or u.get("name")) not in baseline_users
+                        ]
+                    message_details.append({
+                        "label": target["label"],
+                        "control": target["kind"],
+                        "completed_poll": completed,
+                        "clicked_view_only_control": clicked,
+                        "result": result,
+                    })
+                    if clicked and target["kind"] == "view_poll" and completed:
+                        modal_counts = await page.evaluate("""() => {
+                          const overlay = document.querySelector('[role="dialog"], [aria-modal="true"]') || document.body;
+                          return [...overlay.querySelectorAll('button, [role="button"]')].map((el, i) => {
+                            const label = (el.innerText || el.getAttribute('aria-label') || el.title || '').replace(/\\s+/g, ' ').trim();
+                            if (!/^[0-9]+\\s+(?:голос|голоса|голосов|vote|votes)$/i.test(label)) return null;
+                            const key = `modal-voter-${i}`;
+                            el.setAttribute('data-scraper-voter-target', key);
+                            return {key, label};
+                          }).filter(Boolean);
+                        }""")
+                        for modal_count in modal_counts:
+                            count_button = page.locator(f'[data-scraper-voter-target="{modal_count["key"]}"]')
+                            try:
+                                await count_button.hover(timeout=1800)
+                                await page.wait_for_timeout(250)
+                                modal_before = await page.evaluate(VOTER_VIEW_SCRIPT)
+                                await count_button.click(timeout=1800)
+                                await page.wait_for_timeout(400)
+                                modal_result = await page.evaluate(VOTER_VIEW_SCRIPT)
+                                message_details.append({
+                                    "label": modal_count["label"],
+                                    "control": "completed_poll_modal_vote_count",
+                                    "completed_poll": True,
+                                    "clicked_view_only_control": True,
+                                    "result": modal_result,
+                                    "baseline_user_count": len(modal_before.get("users", [])),
+                                })
+                                await page.keyboard.press("Escape")
+                            except Exception as exc:
+                                message_details.append({"label": modal_count["label"], "error": str(exc)})
+                    if clicked:
+                        await page.keyboard.press("Escape")
+                        await page.wait_for_timeout(150)
+                except Exception as exc:
+                    message_details.append({"label": target["label"], "error": str(exc)})
+            if message_details:
+                message["poll_voter_details"] = message_details
+        except Exception as exc:
+            message["poll_voter_inspection_error"] = str(exc)
 
 
 def attachment_filename(url: str, label: str, thread_id: str, message_id: str, index: int) -> str:
@@ -508,6 +685,99 @@ async def download_attachments(context: BrowserContext, messages: list[dict], fo
         message["attachments"] = message.get("attachments", [])
 
 
+def attach_page_error_handlers(page: Page, browser_errors: list[str]) -> None:
+    def record(text: str) -> None:
+        browser_errors.append(text[:1000])
+        del browser_errors[:-100]
+
+    page.on("console", lambda msg: record(f"console: {msg.text}") if msg.type == "error" else None)
+    page.on("pageerror", lambda exc: record(f"page error: {exc}"))
+    page.on(
+        "requestfailed",
+        lambda req: record(f"request failed: {req.url.split('?')[0]} ({req.failure})"),
+    )
+
+
+async def scrape_one_post(
+    context: BrowserContext,
+    guild_id: str,
+    channel_id: str,
+    post: dict[str, Any],
+    index: int,
+    total: int,
+    args: argparse.Namespace,
+    output_dir: Path,
+    browser_errors: list[str],
+    semaphore: asyncio.Semaphore,
+) -> dict[str, Any]:
+    async with semaphore:
+        page = await context.new_page()
+        attach_page_error_handlers(page, browser_errors)
+        record: dict[str, Any] = {
+            "type": "post",
+            "guild_id": guild_id,
+            "channel_id": channel_id,
+            "post_id": post["id"],
+            "title": post.get("title"),
+            "author": post.get("author"),
+            "author_id": post.get("author_id"),
+            "published_at": post.get("created_at"),
+            "preview_text": post.get("preview_text"),
+            "tags": post.get("tags", []),
+            "url": post.get("url"),
+            "messages": [],
+            "thread_snapshot": None,
+            "poll_voter_visibility_note": (
+                "Only voter names/IDs/roles visibly rendered by Discord to this logged-in account can be captured. "
+                "Discord-hidden voters or details are unavailable and are not inferred."
+            ),
+        }
+        try:
+            print(f"[{index}/{total}] Открываю публикацию {post['id']}…")
+            metadata = await open_forum_post(
+                page, guild_id, channel_id, post["id"], args.max_scrolls, output_dir, browser_errors
+            )
+            record.update({
+                "title": metadata.get("title") or record.get("title"),
+                "author": metadata.get("author") or record.get("author"),
+                "author_id": metadata.get("author_id") or record.get("author_id"),
+                "published_at": metadata.get("created_at") or record.get("published_at"),
+                "preview_text": metadata.get("preview_text") or record.get("preview_text"),
+                "tags": metadata.get("tags") or record.get("tags", []),
+                "url": metadata.get("url") or record.get("url"),
+            })
+            messages = await collect_messages(page, args.max_scrolls)
+            for message in messages:
+                message["thread_id"] = post["id"]
+            if args.inspect_voters:
+                await inspect_poll_voters(page, messages)
+            record["title"] = record.get("title") or await page.title()
+            record["messages"] = messages
+            if not messages:
+                record["thread_snapshot"] = await page.evaluate(
+                    THREAD_PAGE_SNAPSHOT_SCRIPT, {"postTitle": record.get("title", "")}
+                )
+            if args.download_files:
+                await download_attachments(context, messages, output_dir / "attachments" / post["id"])
+            print(f"[{index}/{total}] Готово: {post['id']} ({len(messages)} сообщений)")
+        except Exception as exc:
+            browser_errors.append(f"post {post['id']}: {exc}")
+            record["error"] = str(exc)
+            try:
+                record["thread_snapshot"] = await page.evaluate(
+                    THREAD_PAGE_SNAPSHOT_SCRIPT, {"postTitle": record.get("title", "")}
+                )
+            except Exception:
+                pass
+            print(f"Warning: publication {post['id']} failed: {exc}", file=sys.stderr)
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+        return record
+
+
 async def main_async(args: argparse.Namespace) -> None:
     guild_id, channel_id = str(args.guild_id), str(args.channel_id)
     channel_url = f"https://discord.com/channels/{guild_id}/{channel_id}"
@@ -540,17 +810,7 @@ async def main_async(args: argparse.Namespace) -> None:
         )
         page = context.pages[0] if context.pages else await context.new_page()
         browser_errors: list[str] = []
-
-        def record_browser_error(text: str) -> None:
-            browser_errors.append(text[:1000])
-            del browser_errors[:-80]
-
-        page.on("console", lambda msg: record_browser_error(f"console: {msg.text}") if msg.type == "error" else None)
-        page.on("pageerror", lambda exc: record_browser_error(f"page error: {exc}"))
-        page.on(
-            "requestfailed",
-            lambda req: record_browser_error(f"request failed: {req.url.split('?')[0]} ({req.failure})"),
-        )
+        attach_page_error_handlers(page, browser_errors)
         await page.goto(channel_url, wait_until="domcontentloaded")
         print(
             "Если Discord попросит войти, сделайте это в открытом окне. "
@@ -601,58 +861,38 @@ async def main_async(args: argparse.Namespace) -> None:
 
         output_path = output_dir / (f"post_{args.post_id}_test.jsonl" if args.post_id else "posts.jsonl")
         total_messages = 0
+        failed_posts = 0
+        semaphore = asyncio.Semaphore(1 if args.post_id else args.workers)
+        tasks = [
+            asyncio.create_task(
+                scrape_one_post(
+                    context, guild_id, channel_id, post, index, len(posts), args, output_dir, browser_errors, semaphore
+                )
+            )
+            for index, post in enumerate(posts.values(), 1)
+        ]
         with output_path.open("w", encoding="utf-8") as out:
-            for index, post in enumerate(posts.values(), 1):
-                print(f"[{index}/{len(posts)}] Собираю публикацию {post['id']}…")
-                try:
-                    if args.post_id:
-                        post.update(await open_forum_post(
-                            page, guild_id, channel_id, args.post_id, args.max_scrolls, output_dir, browser_errors
-                        ))
-                    else:
-                        await page.goto(post["url"], wait_until="domcontentloaded")
-                        await page.wait_for_timeout(3000)
-                    messages = await collect_messages(page, args.max_scrolls)
-                    for message in messages:
-                        message["thread_id"] = post["id"]
-                    thread_snapshot = None
-                    if not messages:
-                        thread_snapshot = await page.evaluate(
-                            THREAD_PAGE_SNAPSHOT_SCRIPT, {"postTitle": post.get("title", "")}
-                        )
-                    title = post.get("title") or await page.title()
-                    record = {
-                        "type": "post",
-                        "guild_id": guild_id,
-                        "channel_id": channel_id,
-                        "post_id": post["id"],
-                        "title": title,
-                        "author": post.get("author"),
-                        "author_id": post.get("author_id"),
-                        "published_at": post.get("created_at"),
-                        "preview_text": post.get("preview_text"),
-                        "tags": post.get("tags", []),
-                        "url": post["url"],
-                        "messages": messages,
-                        "thread_snapshot": thread_snapshot,
-                    }
-                    if args.download_files:
-                        await download_attachments(context, messages, output_dir / "attachments" / post["id"])
-                    out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                    out.flush()
-                    total_messages += len(messages)
-                except Exception as exc:
-                    print(f"Warning: publication {post['id']} skipped: {exc}", file=sys.stderr)
+            for completed_task in asyncio.as_completed(tasks):
+                record = await completed_task
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                out.flush()
+                total_messages += len(record.get("messages", []))
+                failed_posts += int(bool(record.get("error")))
 
         if total_messages == 0:
             bundle = await save_debug_bundle(
-                page, output_dir, "No message roots detected inside any forum post", guild_id, channel_id, browser_errors
+                page,
+                output_dir,
+                "No message roots detected; inspect post-level thread_snapshot/error fields",
+                guild_id,
+                channel_id,
+                browser_errors,
             )
-            print(
-                "Warning: карточки собраны, но message DOM-селекторы не нашли сообщений. "
-                f"В posts.jsonl добавлен видимый снимок каждой публикации; диагностика: {bundle}"
-            )
-        print(f"Готово: {len(posts)} публикаций, {total_messages} сообщений. Результат: {output_path}")
+            print(f"Warning: message roots were not detected; diagnostics saved to {bundle}")
+        print(
+            f"Готово: {len(posts)} публикаций, {total_messages} сообщений, "
+            f"ошибок публикаций {failed_posts}, workers={1 if args.post_id else args.workers}. Результат: {output_path}"
+        )
         await context.close()
 
 
@@ -663,13 +903,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-o", "--output", default="discord_forum_export", help="Папка экспорта")
     parser.add_argument("--profile", default=".discord_browser_profile", help="Локальный профиль Chromium для сессии Discord")
     parser.add_argument("--max-scrolls", type=int, default=250, help="Лимит прокруток на форум/публикацию")
+    parser.add_argument("--workers", type=int, default=4, help="Число параллельных публикаций при полном сборе (1–8)")
     parser.add_argument("--post-id", default="", help="Тестовый режим: собрать только одну публикацию по ID")
+    parser.add_argument("--no-inspect-voters", dest="inspect_voters", action="store_false", help="Не открывать безопасные элементы просмотра списка голосовавших")
     parser.add_argument("--wait-timeout", type=int, default=600, help="Сколько секунд ждать авторизацию и появления публикаций")
     parser.add_argument("--no-download-files", dest="download_files", action="store_false", help="Не скачивать вложения, только сохранить ссылки")
-    parser.set_defaults(download_files=True)
+    parser.set_defaults(download_files=True, inspect_voters=True)
     args = parser.parse_args()
     if args.max_scrolls < 1:
         parser.error("--max-scrolls must be at least 1")
+    if not 1 <= args.workers <= 8:
+        parser.error("--workers must be between 1 and 8")
     if args.wait_timeout < 1:
         parser.error("--wait-timeout must be at least 1")
     if args.post_id and not re.fullmatch(r"[0-9]{16,22}", args.post_id):

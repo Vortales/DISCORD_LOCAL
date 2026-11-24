@@ -23,7 +23,7 @@ class ForumCollectorGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Discord Forum Exporter")
-        self.root.geometry("800x600")
+        self.root.geometry("800x650")
         self.root.minsize(680, 480)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.process: subprocess.Popen[str] | None = None
@@ -33,7 +33,9 @@ class ForumCollectorGUI:
         self.post_id_var = tk.StringVar(value="1569385787621900359")
         self.output_var = tk.StringVar(value=str(SCRIPT_DIR / "discord_forum_export"))
         self.timeout_var = tk.StringVar(value="600")
+        self.workers_var = tk.StringVar(value="4")
         self.download_var = tk.BooleanVar(value=True)
+        self.voters_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Готов к запуску")
 
         self._build_ui()
@@ -67,20 +69,33 @@ class ForumCollectorGUI:
         ttk.Checkbutton(form, text="Скачивать вложенные файлы", variable=self.download_var).grid(
             row=5, column=1, sticky="w", **pad
         )
+        ttk.Label(form, text="Параллельных задач (1–8):").grid(row=6, column=0, sticky="w", **pad)
+        ttk.Spinbox(form, from_=1, to=8, textvariable=self.workers_var, width=10).grid(
+            row=6, column=1, sticky="w", **pad
+        )
+        ttk.Checkbutton(form, text="Пытаться открыть просмотр списка голосовавших в завершённых опросах", variable=self.voters_var).grid(
+            row=7, column=1, sticky="w", **pad
+        )
 
         note = (
             "Скрипт откроет Chromium; войдите в Discord в этом окне, если потребуется. "
-            "Если заполнен ID публикации, будет собрана только она (тестовый режим). Сохраняются видимые сообщения, даты, авторы, вложения и данные опросов/реакций. "
-            "Имена/роли голосовавших попадут в экспорт, только если Discord отображает их в интерфейсе; скрипт не голосует."
+            "«Полный сбор» обрабатывает публикации параллельно; «Тест публикации» — только ID выше. "
+            "Скрипт может открыть безопасный просмотр опроса и сохраняет имена/роли только когда Discord показывает их; скрытые Discord сведения недоступны, варианты ответа не выбираются."
         )
         ttk.Label(form, text=note, wraplength=740, justify="left").grid(
-            row=6, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
+            row=8, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
         )
 
         controls = ttk.Frame(self.root, padding=(10, 0, 10, 5))
         controls.pack(fill="x")
-        self.start_button = ttk.Button(controls, text="Начать сбор", command=self._start)
+        self.start_button = ttk.Button(
+            controls, text="Полный сбор", command=lambda: self._start(test_mode=False)
+        )
         self.start_button.pack(side="left", padx=5)
+        self.test_button = ttk.Button(
+            controls, text="Тест публикации", command=lambda: self._start(test_mode=True)
+        )
+        self.test_button.pack(side="left", padx=5)
         self.stop_button = ttk.Button(controls, text="Остановить", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=5)
         ttk.Button(controls, text="Открыть папку экспорта", command=self._open_output).pack(side="left", padx=5)
@@ -95,7 +110,7 @@ class ForumCollectorGUI:
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        self._append_log("Нажмите «Начать сбор». Первый запуск может установить Playwright и Chromium.")
+        self._append_log("Выберите «Полный сбор» или «Тест публикации». Первый запуск может установить Playwright и Chromium.")
 
     def _append_log(self, text: str) -> None:
         self.log.configure(state="normal")
@@ -108,7 +123,7 @@ class ForumCollectorGUI:
         if selected:
             self.output_var.set(selected)
 
-    def _start(self) -> None:
+    def _start(self, test_mode: bool = False) -> None:
         if self.process and self.process.poll() is None:
             return
         guild_id = self.guild_var.get().strip()
@@ -117,15 +132,19 @@ class ForumCollectorGUI:
         if not guild_id.isdigit() or not channel_id.isdigit():
             messagebox.showerror("Неверные ID", "Введите числовые ID сервера и форум-канала.")
             return
-        if post_id and (not post_id.isdigit() or not 16 <= len(post_id) <= 22):
-            messagebox.showerror("Неверный ID публикации", "ID публикации должен содержать 16–22 цифры, либо оставьте поле пустым.")
+        if test_mode and not post_id:
+            messagebox.showerror("Нет ID публикации", "Введите ID публикации для точечного теста.")
+            return
+        if test_mode and (not post_id.isdigit() or not 16 <= len(post_id) <= 22):
+            messagebox.showerror("Неверный ID публикации", "ID публикации должен содержать 16–22 цифры.")
             return
         try:
             timeout = int(self.timeout_var.get())
-            if timeout < 1:
+            workers = int(self.workers_var.get())
+            if timeout < 1 or not 1 <= workers <= 8:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Неверное время", "Таймаут должен быть положительным числом секунд.")
+            messagebox.showerror("Неверные параметры", "Таймаут должен быть положительным, workers — от 1 до 8.")
             return
 
         output = Path(self.output_var.get()).expanduser()
@@ -136,15 +155,20 @@ class ForumCollectorGUI:
             "--output", str(output),
             "--profile", str(SCRIPT_DIR / ".discord_browser_profile"),
             "--wait-timeout", str(timeout),
+            "--workers", str(workers),
         ]
-        if post_id:
+        if test_mode:
             command.extend(["--post-id", post_id])
         if not self.download_var.get():
             command.append("--no-download-files")
+        if not self.voters_var.get():
+            command.append("--no-inspect-voters")
 
-        self._append_log("Запуск: " + " ".join(command))
-        self.status_var.set("Запускаю сбор…")
+        mode = f"тест публикации {post_id}" if test_mode else f"полный сбор, workers={workers}"
+        self._append_log(f"Запуск ({mode}): " + " ".join(command))
+        self.status_var.set(f"Запускаю: {mode}…")
         self.start_button.configure(state="disabled")
+        self.test_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
         self.progress.start(12)
         try:
@@ -178,7 +202,7 @@ class ForumCollectorGUI:
                 if kind == "line":
                     line = str(value)
                     self._append_log(line)
-                    if "Собираю публикацию" in line:
+                    if "Собираю публикацию" in line or "Открываю публикацию" in line:
                         self.status_var.set(line)
                     elif "ждёт появления публикаций" in line:
                         self.status_var.set("Ожидаю входа и появления публикаций в открытом Chromium…")
@@ -198,6 +222,7 @@ class ForumCollectorGUI:
     def _finish(self, code: int | None) -> None:
         self.progress.stop()
         self.start_button.configure(state="normal")
+        self.test_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
         if code is not None:
             self.process = None
