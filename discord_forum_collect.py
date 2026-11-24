@@ -109,7 +109,7 @@ MESSAGE_SCRIPT = r"""() => {
       polls,
       visible_controls: controls
     };
-  }).filter(m => m.dom_id && (m.text || m.attachments.length));
+  }).filter(m => /^[0-9]{16,22}$/.test(m.message_id) && (m.text || m.attachments.length));
 }"""
 
 THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
@@ -462,6 +462,15 @@ async def scroll_and_collect_forum(page: Page, guild_id: str, channel_id: str, m
         await page.evaluate("""() => { const el = (%s)(%s); el.scrollTop = 0; }""" % (SCROLLER_SCRIPT, json.dumps(channel_id)))
         await page.wait_for_timeout(850)
     return posts
+
+
+def posts_through_id(posts: dict[str, dict[str, Any]], stop_id: str) -> dict[str, dict[str, Any]]:
+    """Return posts in discovery order through and including stop_id."""
+    ordered_ids = list(posts)
+    if stop_id not in posts:
+        raise ValueError(f"Stop post {stop_id} was not found among {len(posts)} discovered cards.")
+    stop_index = ordered_ids.index(stop_id)
+    return {post_id: posts[post_id] for post_id in ordered_ids[:stop_index + 1]}
 
 
 async def open_forum_post(
@@ -971,6 +980,11 @@ async def scrape_one_post(
             messages = await collect_messages(page, args.max_scrolls)
             for message in messages:
                 message["thread_id"] = post["id"]
+            if not record.get("published_at"):
+                first_message_time = next((m.get("timestamp") for m in messages if m.get("timestamp")), None)
+                if first_message_time:
+                    record["published_at"] = first_message_time
+                    record["published_at_source"] = "first_visible_message_timestamp"
 
             async def restore_target_post() -> None:
                 await open_forum_post(
@@ -1115,6 +1129,19 @@ async def main_async(args: argparse.Namespace) -> None:
             }
         else:
             posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
+        if args.stop_after_post_id:
+            try:
+                posts = posts_through_id(posts, args.stop_after_post_id)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Публикация остановки {args.stop_after_post_id} не найдена. "
+                    "Увеличьте --max-scrolls или проверьте ID. "
+                    f"{exc}"
+                ) from exc
+            print(
+                f"Ограничение полного сбора: {len(posts)} публикаций в порядке обнаружения, "
+                f"последняя включена: {args.stop_after_post_id}."
+            )
         if not posts:
             bundle = await save_debug_bundle(
                 page, output_dir, "Channel loaded but no forum cards were detected", guild_id, channel_id, browser_errors
@@ -1128,22 +1155,36 @@ async def main_async(args: argparse.Namespace) -> None:
         output_path = output_dir / (f"post_{args.post_id}_test.jsonl" if args.post_id else "posts.jsonl")
         total_messages = 0
         failed_posts = 0
-        semaphore = asyncio.Semaphore(1 if args.post_id else args.workers)
-        tasks = [
-            asyncio.create_task(
-                scrape_one_post(
-                    context, guild_id, channel_id, post, index, len(posts), args, output_dir, browser_errors, semaphore
-                )
-            )
-            for index, post in enumerate(posts.values(), 1)
-        ]
+        ordered_stop = bool(args.stop_after_post_id)
+        worker_count = 1 if args.post_id or ordered_stop else args.workers
+        semaphore = asyncio.Semaphore(worker_count)
+
+        def write_record(out, record: dict[str, Any]) -> None:
+            nonlocal total_messages, failed_posts
+            out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            out.flush()
+            total_messages += len(record.get("messages", []))
+            failed_posts += int(bool(record.get("error")))
+
         with output_path.open("w", encoding="utf-8") as out:
-            for completed_task in asyncio.as_completed(tasks):
-                record = await completed_task
-                out.write(json.dumps(record, ensure_ascii=False) + "\n")
-                out.flush()
-                total_messages += len(record.get("messages", []))
-                failed_posts += int(bool(record.get("error")))
+            if ordered_stop:
+                # The stop-after mode is deliberately serial: no post after the inclusive endpoint is started.
+                for index, post in enumerate(posts.values(), 1):
+                    record = await scrape_one_post(
+                        context, guild_id, channel_id, post, index, len(posts), args, output_dir, browser_errors, semaphore
+                    )
+                    write_record(out, record)
+            else:
+                tasks = [
+                    asyncio.create_task(
+                        scrape_one_post(
+                            context, guild_id, channel_id, post, index, len(posts), args, output_dir, browser_errors, semaphore
+                        )
+                    )
+                    for index, post in enumerate(posts.values(), 1)
+                ]
+                for completed_task in asyncio.as_completed(tasks):
+                    write_record(out, await completed_task)
 
         if total_messages == 0:
             bundle = await save_debug_bundle(
@@ -1157,7 +1198,7 @@ async def main_async(args: argparse.Namespace) -> None:
             print(f"Warning: message roots were not detected; diagnostics saved to {bundle}")
         print(
             f"Готово: {len(posts)} публикаций, {total_messages} сообщений, "
-            f"ошибок публикаций {failed_posts}, workers={1 if args.post_id else args.workers}. Результат: {output_path}"
+            f"ошибок публикаций {failed_posts}, workers={worker_count}. Результат: {output_path}"
         )
         await context.close()
 
@@ -1171,6 +1212,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-scrolls", type=int, default=250, help="Лимит прокруток на форум/публикацию")
     parser.add_argument("--workers", type=int, default=4, help="Число параллельных публикаций при полном сборе (1–8)")
     parser.add_argument("--post-id", default="", help="Тестовый режим: собрать только одну публикацию по ID")
+    parser.add_argument("--stop-after-post-id", default="", help="Полный сбор в порядке обнаружения до этой публикации включительно; работает последовательно")
     parser.add_argument("--no-inspect-voters", dest="inspect_voters", action="store_false", help="Не открывать безопасные элементы просмотра списка голосовавших")
     parser.add_argument("--wait-timeout", type=int, default=600, help="Сколько секунд ждать авторизацию и появления публикаций")
     parser.add_argument("--no-download-files", dest="download_files", action="store_false", help="Не скачивать вложения, только сохранить ссылки")
@@ -1184,6 +1226,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--wait-timeout must be at least 1")
     if args.post_id and not re.fullmatch(r"[0-9]{16,22}", args.post_id):
         parser.error("--post-id must be a Discord snowflake (16–22 digits)")
+    if args.stop_after_post_id and not re.fullmatch(r"[0-9]{16,22}", args.stop_after_post_id):
+        parser.error("--stop-after-post-id must be a Discord snowflake (16–22 digits)")
+    if args.post_id and args.stop_after_post_id:
+        parser.error("--post-id and --stop-after-post-id cannot be used together")
     return args
 
 

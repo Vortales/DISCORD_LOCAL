@@ -31,6 +31,7 @@ class ForumCollectorGUI:
         self.guild_var = tk.StringVar(value=DEFAULT_GUILD_ID)
         self.channel_var = tk.StringVar(value=DEFAULT_CHANNEL_ID)
         self.post_id_var = tk.StringVar(value="1569385787621900359")
+        self.stop_after_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=str(SCRIPT_DIR / "discord_forum_export"))
         self.timeout_var = tk.StringVar(value="600")
         self.workers_var = tk.StringVar(value="4")
@@ -58,32 +59,37 @@ class ForumCollectorGUI:
         )
         ttk.Entry(form, textvariable=self.post_id_var).grid(row=2, column=1, sticky="ew", **pad)
 
-        ttk.Label(form, text="Папка экспорта:").grid(row=3, column=0, sticky="w", **pad)
-        ttk.Entry(form, textvariable=self.output_var).grid(row=3, column=1, sticky="ew", **pad)
-        ttk.Button(form, text="Обзор…", command=self._choose_output).grid(row=3, column=2, **pad)
-
-        ttk.Label(form, text="Ожидать вход и загрузку (сек.):").grid(row=4, column=0, sticky="w", **pad)
-        ttk.Spinbox(form, from_=60, to=3600, increment=60, textvariable=self.timeout_var, width=10).grid(
-            row=4, column=1, sticky="w", **pad
+        ttk.Label(form, text="Остановить полный сбор после ID (включительно):").grid(
+            row=3, column=0, sticky="w", **pad
         )
-        ttk.Checkbutton(form, text="Скачивать вложенные файлы", variable=self.download_var).grid(
+        ttk.Entry(form, textvariable=self.stop_after_var).grid(row=3, column=1, sticky="ew", **pad)
+
+        ttk.Label(form, text="Папка экспорта:").grid(row=4, column=0, sticky="w", **pad)
+        ttk.Entry(form, textvariable=self.output_var).grid(row=4, column=1, sticky="ew", **pad)
+        ttk.Button(form, text="Обзор…", command=self._choose_output).grid(row=4, column=2, **pad)
+
+        ttk.Label(form, text="Ожидать вход и загрузку (сек.):").grid(row=5, column=0, sticky="w", **pad)
+        ttk.Spinbox(form, from_=60, to=3600, increment=60, textvariable=self.timeout_var, width=10).grid(
             row=5, column=1, sticky="w", **pad
         )
-        ttk.Label(form, text="Параллельных задач (1–8):").grid(row=6, column=0, sticky="w", **pad)
-        ttk.Spinbox(form, from_=1, to=8, textvariable=self.workers_var, width=10).grid(
+        ttk.Checkbutton(form, text="Скачивать вложенные файлы", variable=self.download_var).grid(
             row=6, column=1, sticky="w", **pad
         )
-        ttk.Checkbutton(form, text="Открывать ссылки со списком голосовавших и просмотр опроса", variable=self.voters_var).grid(
+        ttk.Label(form, text="Параллельных задач (1–8):").grid(row=7, column=0, sticky="w", **pad)
+        ttk.Spinbox(form, from_=1, to=8, textvariable=self.workers_var, width=10).grid(
             row=7, column=1, sticky="w", **pad
+        )
+        ttk.Checkbutton(form, text="Открывать ссылки со списком голосовавших и просмотр опроса", variable=self.voters_var).grid(
+            row=8, column=1, sticky="w", **pad
         )
 
         note = (
             "Скрипт откроет Chromium; войдите в Discord в этом окне, если потребуется. "
-            "«Полный сбор» обрабатывает публикации параллельно; «Тест публикации» — только ID выше. "
-            "Скрипт может открыть безопасный просмотр опроса и сохраняет имена/роли только когда Discord показывает их; скрытые Discord сведения недоступны, варианты ответа не выбираются."
+            "«Полный сбор» обрабатывает публикации параллельно; ID остановки включает указанную публикацию и отключает параллельность, чтобы сохранить порядок. "
+            "«Тест публикации» — только ID выше. Списки голосовавших сохраняются, только если Discord показывает их; скрытые данные недоступны, варианты ответа не выбираются."
         )
         ttk.Label(form, text=note, wraplength=740, justify="left").grid(
-            row=8, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
+            row=9, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
         )
 
         controls = ttk.Frame(self.root, padding=(10, 0, 10, 5))
@@ -174,6 +180,7 @@ class ForumCollectorGUI:
         guild_id = self.guild_var.get().strip()
         channel_id = self.channel_var.get().strip()
         post_id = self.post_id_var.get().strip()
+        stop_after_id = self.stop_after_var.get().strip()
         if not guild_id.isdigit() or not channel_id.isdigit():
             messagebox.showerror("Неверные ID", "Введите числовые ID сервера и форум-канала.")
             return
@@ -182,6 +189,14 @@ class ForumCollectorGUI:
             return
         if test_mode and (not post_id.isdigit() or not 16 <= len(post_id) <= 22):
             messagebox.showerror("Неверный ID публикации", "ID публикации должен содержать 16–22 цифры.")
+            return
+        if test_mode and stop_after_id:
+            messagebox.showerror("Неверный режим", "ID остановки применяется только к кнопке «Полный сбор».")
+            return
+        if not test_mode and stop_after_id and (
+            not stop_after_id.isdigit() or not 16 <= len(stop_after_id) <= 22
+        ):
+            messagebox.showerror("Неверный ID остановки", "ID публикации должен содержать 16–22 цифры.")
             return
         try:
             timeout = int(self.timeout_var.get())
@@ -204,12 +219,20 @@ class ForumCollectorGUI:
         ]
         if test_mode:
             command.extend(["--post-id", post_id])
+        elif stop_after_id:
+            command.extend(["--stop-after-post-id", stop_after_id])
         if not self.download_var.get():
             command.append("--no-download-files")
         if not self.voters_var.get():
             command.append("--no-inspect-voters")
 
-        mode = f"тест публикации {post_id}" if test_mode else f"полный сбор, workers={workers}"
+        mode = (
+            f"тест публикации {post_id}"
+            if test_mode
+            else f"полный сбор до {stop_after_id} включительно, workers=1"
+            if stop_after_id
+            else f"полный сбор, workers={workers}"
+        )
         self._append_log(f"Запуск ({mode}): " + " ".join(command))
         self.status_var.set(f"Запускаю: {mode}…")
         self.start_button.configure(state="disabled")
