@@ -27,6 +27,8 @@ import json
 import re
 import subprocess
 import sys
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -171,6 +173,71 @@ def safe_name(value: str, fallback: str) -> str:
     return (value[:160] or fallback)
 
 
+async def save_debug_bundle(
+    page: Page,
+    output_dir: Path,
+    reason: str,
+    guild_id: str,
+    channel_id: str,
+    browser_errors: list[str],
+) -> Path:
+    """Save a single ZIP with a screenshot and non-secret page diagnostics."""
+    screenshot: bytes | None = None
+    screenshot_error = None
+    try:
+        screenshot = await page.screenshot(full_page=False, timeout=15_000)
+    except Exception as exc:
+        screenshot_error = str(exc)
+
+    try:
+        page_data = await page.evaluate("""() => {
+          const candidates = [...document.querySelectorAll(
+            'article, [role="article"], [data-post-id], [data-list-item-id], [id*="forum" i]'
+          )].slice(0, 80).map(el => ({
+            tag: el.tagName,
+            id: el.id,
+            role: el.getAttribute('role'),
+            class_name: typeof el.className === 'string' ? el.className.slice(0, 180) : '',
+            data_post_id: el.getAttribute('data-post-id'),
+            data_list_item_id: el.getAttribute('data-list-item-id'),
+            text_preview: (el.innerText || '').trim().slice(0, 140)
+          }));
+          const links = [...document.querySelectorAll('a[href]')]
+            .filter(a => a.href.includes('/channels/')).slice(0, 80)
+            .map(a => ({href: a.href.split('?')[0], text: (a.innerText || '').trim().slice(0, 100)}));
+          return {
+            url: location.href.split('?')[0],
+            title: document.title,
+            ready_state: document.readyState,
+            body_text_preview: (document.body?.innerText || '').slice(0, 2500),
+            candidate_count: document.querySelectorAll(
+              'article, [role="article"], [data-post-id], [data-list-item-id], [id*="forum" i]'
+            ).length,
+            candidates,
+            channel_links: links
+          };
+        }""")
+    except Exception as exc:
+        page_data = {"page_inspection_error": str(exc)}
+
+    report = {
+        "reason": reason,
+        "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+        "guild_id": guild_id,
+        "channel_id": channel_id,
+        "browser_errors": browser_errors[-80:],
+        "screenshot_error": screenshot_error,
+        "page": page_data,
+        "privacy_note": "Contains a screenshot and short visible text snippets. It does not include cookies, tokens, local storage, or password values.",
+    }
+    bundle_path = output_dir / "discord_forum_debug.zip"
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("diagnostics.json", json.dumps(report, ensure_ascii=False, indent=2))
+        if screenshot is not None:
+            archive.writestr("page.png", screenshot)
+    return bundle_path
+
+
 async def scroll_and_collect_forum(page: Page, guild_id: str, channel_id: str, max_scrolls: int) -> dict[str, dict]:
     posts: dict[str, dict] = {}
     no_growth = 0
@@ -303,6 +370,18 @@ async def main_async(args: argparse.Namespace) -> None:
             viewport={"width": 1440, "height": 1000},
         )
         page = context.pages[0] if context.pages else await context.new_page()
+        browser_errors: list[str] = []
+
+        def record_browser_error(text: str) -> None:
+            browser_errors.append(text[:1000])
+            del browser_errors[:-80]
+
+        page.on("console", lambda msg: record_browser_error(f"console: {msg.text}") if msg.type == "error" else None)
+        page.on("pageerror", lambda exc: record_browser_error(f"page error: {exc}"))
+        page.on(
+            "requestfailed",
+            lambda req: record_browser_error(f"request failed: {req.url.split('?')[0]} ({req.failure})"),
+        )
         await page.goto(channel_url, wait_until="domcontentloaded")
         print(
             "Если Discord попросит войти, сделайте это в открытом окне. "
@@ -318,41 +397,24 @@ async def main_async(args: argparse.Namespace) -> None:
                 timeout=args.wait_timeout * 1000,
             )
         except PlaywrightTimeoutError as exc:
-            screenshot = output_dir / "forum-load-timeout.png"
-            await page.screenshot(path=str(screenshot), full_page=False)
+            bundle = await save_debug_bundle(
+                page, output_dir, "Timed out waiting for the Discord channel UI", guild_id, channel_id, browser_errors
+            )
             raise RuntimeError(
-                "Публикации не появились за отведённое время. Проверьте, что вход в Discord завершён, "
-                "ID верны и форум открылся. Снимок экрана для диагностики сохранён в "
-                f"{screenshot}."
+                "Страница канала не загрузилась вовремя. Диагностика собрана в один файл: "
+                f"{bundle}. В архиве есть снимок страницы и техническая информация."
             ) from exc
         await page.wait_for_timeout(2500)
 
         posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
         if not posts:
-            screenshot = output_dir / "forum-no-post-links.png"
-            debug_path = output_dir / "forum-dom-debug.json"
-            await page.screenshot(path=str(screenshot), full_page=False)
-            debug_data = await page.evaluate("""() => {
-              const candidates = [...document.querySelectorAll(
-                'article, [role="article"], [data-post-id], [data-list-item-id], [id*="forum" i]'
-              )].slice(0, 60).map(el => ({
-                tag: el.tagName,
-                id: el.id,
-                role: el.getAttribute('role'),
-                class_name: typeof el.className === 'string' ? el.className.slice(0, 180) : '',
-                data_post_id: el.getAttribute('data-post-id'),
-                data_list_item_id: el.getAttribute('data-list-item-id'),
-                text_preview: (el.innerText || '').trim().slice(0, 140)
-              }));
-              const links = [...document.querySelectorAll('a[href*="/channels/"]')].slice(0, 60)
-                .map(a => ({href: a.href, text: (a.innerText || '').trim().slice(0, 100)}));
-              return {url: location.href, title: document.title, candidates, links};
-            }""")
-            debug_path.write_text(json.dumps(debug_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            bundle = await save_debug_bundle(
+                page, output_dir, "Channel loaded but no forum cards were detected", guild_id, channel_id, browser_errors
+            )
             raise RuntimeError(
-                "Страница загрузилась, но сборщик не нашёл карточки публикаций. "
-                f"Сохранены снимок {screenshot} и структура DOM {debug_path}; "
-                "в debug-файле могут быть видны имена и фрагменты сообщений — не отправляйте его без проверки/редактирования."
+                "Страница загрузилась, но карточки публикаций не распознаны. "
+                f"Один архив диагностики: {bundle}. В нём есть скриншот, структура страницы и ошибки браузера; "
+                "перед отправкой проверьте видимые фрагменты сообщений и имена."
             )
 
         output_path = output_dir / "posts.jsonl"
