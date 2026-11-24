@@ -73,7 +73,7 @@ class ForumCollectorGUI:
         ttk.Spinbox(form, from_=1, to=8, textvariable=self.workers_var, width=10).grid(
             row=6, column=1, sticky="w", **pad
         )
-        ttk.Checkbutton(form, text="Пытаться открыть просмотр списка голосовавших в завершённых опросах", variable=self.voters_var).grid(
+        ttk.Checkbutton(form, text="Открывать ссылки со списком голосовавших и просмотр опроса", variable=self.voters_var).grid(
             row=7, column=1, sticky="w", **pad
         )
 
@@ -99,6 +99,7 @@ class ForumCollectorGUI:
         self.stop_button = ttk.Button(controls, text="Остановить", command=self._stop, state="disabled")
         self.stop_button.pack(side="left", padx=5)
         ttk.Button(controls, text="Открыть папку экспорта", command=self._open_output).pack(side="left", padx=5)
+        ttk.Button(controls, text="Копировать лог", command=self._copy_log).pack(side="left", padx=5)
         self.progress = ttk.Progressbar(controls, mode="indeterminate")
         self.progress.pack(side="right", fill="x", expand=True, padx=8)
 
@@ -110,6 +111,13 @@ class ForumCollectorGUI:
         self.log.configure(yscrollcommand=scrollbar.set)
         self.log.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+        self.log_menu = tk.Menu(self.root, tearoff=False)
+        self.log_menu.add_command(label="Копировать выделенное", command=self._copy_log_selection)
+        self.log_menu.add_command(label="Копировать весь лог", command=self._copy_log)
+        self.log_menu.add_command(label="Выделить всё", command=self._select_all_log)
+        self.log.bind("<Control-c>", self._copy_log_selection)
+        self.log.bind("<Control-a>", self._select_all_log)
+        self.log.bind("<Button-3>", self._show_log_menu)
         self._append_log("Выберите «Полный сбор» или «Тест публикации». Первый запуск может установить Playwright и Chromium.")
 
     def _append_log(self, text: str) -> None:
@@ -117,6 +125,43 @@ class ForumCollectorGUI:
         self.log.insert("end", text.rstrip() + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _copy_text_to_clipboard(self, text: str) -> None:
+        if not text:
+            self.status_var.set("Нет текста для копирования")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update_idletasks()
+        self.status_var.set("Текст скопирован в буфер обмена")
+
+    def _copy_log_selection(self, _event: tk.Event | None = None) -> str:
+        try:
+            selected = self.log.get("sel.first", "sel.last")
+        except tk.TclError:
+            return "break"
+        self._copy_text_to_clipboard(selected)
+        return "break"
+
+    def _copy_log(self) -> None:
+        try:
+            text = self.log.get("sel.first", "sel.last")
+        except tk.TclError:
+            text = self.log.get("1.0", "end-1c")
+        self._copy_text_to_clipboard(text)
+
+    def _select_all_log(self, _event: tk.Event | None = None) -> str:
+        self.log.tag_add("sel", "1.0", "end-1c")
+        self.log.mark_set("insert", "end-1c")
+        self.log.see("insert")
+        return "break"
+
+    def _show_log_menu(self, event: tk.Event) -> str:
+        try:
+            self.log_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.log_menu.grab_release()
+        return "break"
 
     def _choose_output(self) -> None:
         selected = filedialog.askdirectory(initialdir=self.output_var.get() or str(SCRIPT_DIR))

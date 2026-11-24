@@ -30,7 +30,7 @@ import sys
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs, unquote, urlparse
 
 
@@ -577,6 +577,8 @@ async def inspect_poll_voters(
     context: BrowserContext,
     messages: list[dict[str, Any]],
     max_scrolls: int,
+    post_id: str,
+    restore_post: Callable[[], Awaitable[None]],
 ) -> list[dict[str, Any]]:
     """Inspect vote-count links and view controls without selecting poll answers; return detailed diagnostics."""
     diagnostics: list[dict[str, Any]] = []
@@ -595,6 +597,22 @@ async def inspect_poll_voters(
             "status": "started",
             "targets": [],
         }
+        if not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+            event.update(
+                status="left_target_post_before_inspection",
+                error=f"The browser left post {post_id}; voter scanning stopped rather than scrolling another route.",
+                current_url=page.url,
+            )
+            diagnostics.append(event)
+            message["poll_voter_details"] = event
+            print(f"[poll-voters] stopping: current route is not target post {post_id}: {page.url}")
+            try:
+                await restore_post()
+            except Exception as exc:
+                event["restore_error"] = str(exc)
+                print(f"[poll-voters] could not restore target post {post_id}: {exc}")
+                break
+            continue
         if not dom_id:
             event.update(status="missing_message_dom_id", error="The message extractor returned no DOM identifier.")
             diagnostics.append(event)
@@ -608,7 +626,14 @@ async def inspect_poll_voters(
         try:
             root_count = await page.locator(selector).count()
             scroll_steps = 0
-            while not root_count and scroll_steps < max(1, min(max_scrolls, 250)):
+            while not root_count and scroll_steps < max(1, min(max_scrolls, 60)):
+                if not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
+                    event.update(
+                        status="left_target_post_during_lookup",
+                        error="The browser left the target post during DOM lookup; scrolling was stopped.",
+                        current_url=page.url,
+                    )
+                    break
                 await page.evaluate(
                     """() => {
                       const scroller = (%s)();
@@ -625,13 +650,14 @@ async def inspect_poll_voters(
                 "page_url": page.url,
             }
             if not root_count:
-                event.update(
-                    status="message_root_not_found",
-                    error="Message was in the collected snapshot but its live DOM node was not found after scrolling.",
-                    visible_message_root_count=await page.locator(
-                        '[data-list-item-id*="chat-messages"], [data-message-id], [id^="chat-messages-"]'
-                    ).count(),
-                )
+                if event.get("status") == "started":
+                    event.update(
+                        status="message_root_not_found",
+                        error="Message was in the collected snapshot but its live DOM node was not found after scrolling.",
+                    )
+                event["visible_message_root_count"] = await page.locator(
+                    '[data-list-item-id*="chat-messages"], [data-message-id], [id^="chat-messages-"]'
+                ).count()
                 diagnostics.append(event)
                 message["poll_voter_details"] = event
                 print(f"[poll-voters] message {message.get('message_id')}: DOM node not found after {scroll_steps} scrolls")
@@ -752,13 +778,20 @@ async def inspect_poll_voters(
                             await opened_page.close()
                         except Exception:
                             pass
-                    if not page.is_closed() and page.url != before_url:
+                    if not page.is_closed() and not urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}"):
                         try:
-                            await page.go_back(wait_until="domcontentloaded", timeout=6000)
-                            await page.wait_for_timeout(400)
-                            item["restored_original_page"] = page.url == before_url
+                            print(f"[poll-voters] restoring target post {post_id} from {page.url}")
+                            await restore_post()
+                            item["restored_target_post"] = urlparse(page.url).path.rstrip("/").endswith(f"/{post_id}")
+                            item["url_after_restore"] = page.url
+                            if not item["restored_target_post"]:
+                                event["status"] = "target_post_restore_failed"
+                                break
                         except Exception as exc:
                             item["restore_error"] = str(exc)
+                            event["status"] = "target_post_restore_failed"
+                            print(f"[poll-voters] restore failed for {post_id}: {exc}")
+                            break
                     elif not page.is_closed():
                         try:
                             await page.keyboard.press("Escape")
@@ -767,7 +800,8 @@ async def inspect_poll_voters(
                 except Exception as exc:
                     item.update(status="inspection_error", error=str(exc))
                     print(f"[poll-voters] control {target.get('label')!r} failed: {exc}")
-            event["status"] = "controls_inspected"
+            if event.get("status") == "started":
+                event["status"] = "controls_inspected"
             diagnostics.append(event)
             message["poll_voter_details"] = event
         except Exception as exc:
@@ -838,8 +872,10 @@ async def scrape_one_post(
     semaphore: asyncio.Semaphore,
 ) -> dict[str, Any]:
     async with semaphore:
-        page = await context.new_page()
-        attach_page_error_handlers(page, browser_errors)
+        reuse_existing_page = bool(args.post_id and context.pages)
+        page = context.pages[0] if reuse_existing_page else await context.new_page()
+        if not reuse_existing_page:
+            attach_page_error_handlers(page, browser_errors)
         record: dict[str, Any] = {
             "type": "post",
             "guild_id": guild_id,
@@ -877,8 +913,16 @@ async def scrape_one_post(
             messages = await collect_messages(page, args.max_scrolls)
             for message in messages:
                 message["thread_id"] = post["id"]
+
+            async def restore_target_post() -> None:
+                await open_forum_post(
+                    page, guild_id, channel_id, post["id"], args.max_scrolls, output_dir, browser_errors
+                )
+
             if args.inspect_voters:
-                poll_events = await inspect_poll_voters(page, context, messages, args.max_scrolls)
+                poll_events = await inspect_poll_voters(
+                    page, context, messages, args.max_scrolls, post["id"], restore_target_post
+                )
                 record["poll_voter_diagnostics"] = [
                     {
                         "message_id": event.get("message_id"),
@@ -906,6 +950,14 @@ async def scrape_one_post(
                 ]
             else:
                 record["poll_voter_diagnostics"] = [{"status": "disabled_by_user", "message": "Voter inspection was disabled."}]
+            if not urlparse(page.url).path.rstrip("/").endswith(f"/{post['id']}"):
+                print(f"[poll-voters] final safety restore to post {post['id']} from {page.url}")
+                try:
+                    await restore_target_post()
+                    record["poll_navigation_restored"] = True
+                except Exception as exc:
+                    record["poll_navigation_restore_error"] = str(exc)
+                    print(f"Warning: could not restore post {post['id']} after poll inspection: {exc}", file=sys.stderr)
             record["title"] = record.get("title") or await page.title()
             record["messages"] = messages
             if not messages:
@@ -926,10 +978,11 @@ async def scrape_one_post(
                 pass
             print(f"Warning: publication {post['id']} failed: {exc}", file=sys.stderr)
         finally:
-            try:
-                await page.close()
-            except Exception:
-                pass
+            if not reuse_existing_page:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
         return record
 
 
