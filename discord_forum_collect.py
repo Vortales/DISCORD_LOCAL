@@ -55,18 +55,39 @@ MESSAGE_SCRIPT = r"""() => {
     const id = el.id || '';
     const authorEl = el.querySelector('[id^="message-username-"]')
       || el.querySelector('[class*="username"]');
+    const authorNode = authorEl?.closest('[data-user-id]') || el.querySelector('[data-user-id]');
+    const authorId = authorNode?.getAttribute('data-user-id') || null;
+    const visibleUsers = [...el.querySelectorAll('[data-user-id]')].map(user => ({
+      id: user.getAttribute('data-user-id'),
+      name: (user.innerText || user.getAttribute('aria-label') || user.getAttribute('alt') || '').trim()
+    })).filter(user => user.id && user.name);
     const timeEl = el.querySelector('time[datetime]');
     const attachments = [...el.querySelectorAll('a[href]')]
       .map(a => ({url: a.href, label: (a.innerText || a.getAttribute('aria-label') || '').trim()}))
       .filter(a => /(?:cdn\.discordapp\.com|media\.discordapp\.net)\/attachments\//i.test(a.url));
     const text = (el.innerText || '').trim();
+    const controls = [...el.querySelectorAll('button, [role="button"]')].map(control => ({
+      text: (control.innerText || '').trim(),
+      aria_label: control.getAttribute('aria-label'),
+      title: control.getAttribute('title')
+    })).filter(item => item.text || item.aria_label || item.title);
+    const poll_or_reaction_details = controls.filter(item =>
+      /poll|vote|voted|votes|react|reaction|голос|опрос|реакц/i.test(
+        `${item.text} ${item.aria_label || ''} ${item.title || ''}`
+      )
+    );
     return {
       dom_id: id,
       message_id: id.split('-').pop(),
       author: authorEl ? (authorEl.innerText || '').trim() : null,
+      author_id: authorId,
+      visible_users: [...new Map(visibleUsers.map(user => [user.id, user])).values()],
       timestamp: timeEl ? timeEl.dateTime : null,
+      edited_timestamp: el.querySelector('time[datetime][aria-label*="edit" i]')?.dateTime || null,
       text,
-      attachments
+      attachments,
+      poll_or_reaction_details,
+      visible_controls: controls
     };
   }).filter(m => m.dom_id && (m.text || m.attachments.length));
 }"""
@@ -79,10 +100,21 @@ THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
     if (!href.includes(prefix)) continue;
     const match = href.match(/\/channels\/(\d+)\/(\d+)\/(\d+)/);
     if (!match || match[1] !== guild || match[2] !== channel) continue;
+    const card = a.closest('article') || a.parentElement?.parentElement || a.parentElement;
+    const timeEl = card?.querySelector('time[datetime]');
+    const authorEl = card?.querySelector('[id^="message-username-"], [class*="username"]');
+    const authorNode = authorEl?.closest('[data-user-id]') || card?.querySelector('[data-user-id]');
+    const tags = [...(card?.querySelectorAll('[class*="tag"]') || [])]
+      .map(tag => (tag.innerText || '').trim()).filter(Boolean);
     found.set(match[3], {
       id: match[3],
       url: `https://discord.com/channels/${guild}/${channel}/${match[3]}`,
-      title: (a.innerText || a.getAttribute('aria-label') || '').trim()
+      title: (a.innerText || a.getAttribute('aria-label') || '').trim(),
+      author: authorEl ? (authorEl.innerText || '').trim() : null,
+      author_id: authorNode?.getAttribute('data-user-id') || null,
+      created_at: timeEl ? timeEl.dateTime : null,
+      preview_text: (card?.innerText || '').trim().slice(0, 4000),
+      tags: [...new Set(tags)]
     });
   }
   return [...found.values()];
@@ -290,6 +322,11 @@ async def main_async(args: argparse.Namespace) -> None:
                         "channel_id": channel_id,
                         "post_id": post["id"],
                         "title": title,
+                        "author": post.get("author"),
+                        "author_id": post.get("author_id"),
+                        "published_at": post.get("created_at"),
+                        "preview_text": post.get("preview_text"),
+                        "tags": post.get("tags", []),
                         "url": post["url"],
                         "messages": messages,
                     }
