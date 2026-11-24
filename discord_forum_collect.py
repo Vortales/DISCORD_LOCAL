@@ -165,12 +165,14 @@ THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
 VOTER_VIEW_SCRIPT = r"""() => {
   const overlays = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]')];
   const root = overlays[overlays.length - 1] || document.body;
-  const users = [...root.querySelectorAll('[data-user-id], [class*="username" i]')].map(el => ({
+  const rootUsers = [...root.querySelectorAll('[data-user-id], [class*="username" i]')]
+    .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden').map(el => ({
     id: el.getAttribute('data-user-id'),
     name: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim(),
     roles: [...el.querySelectorAll('[class*="role" i]')]
       .map(role => (role.innerText || role.getAttribute('aria-label') || '').trim()).filter(Boolean)
   })).filter(x => x.name);
+  const users = [...new Map(rootUsers.map(user => [`${user.id || ''}:${user.name}`, user])).values()];
   const roles = [...root.querySelectorAll('[class*="role" i]')]
     .map(el => (el.innerText || el.getAttribute('aria-label') || '').trim()).filter(Boolean);
   return {
@@ -179,8 +181,53 @@ VOTER_VIEW_SCRIPT = r"""() => {
     has_overlay: overlays.length > 0,
     overlay_text: (root.innerText || '').trim().slice(-12000),
     page_text: (document.body?.innerText || '').trim().slice(-12000),
-    users: [...new Map(users.map(user => [`${user.id || ''}:${user.name}`, user])).values()],
-    roles: [...new Set(roles)]
+    users: overlays.length ? users : [],
+    unscoped_page_users: overlays.length ? [] : users,
+    roles: overlays.length ? [...new Set(roles)] : []
+  };
+}"""
+
+POLL_OVERLAY_TARGETS_SCRIPT = r"""(arg) => {
+  const overlays = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]')];
+  const overlay = overlays[overlays.length - 1];
+  if (!overlay) return {has_overlay: false, controls: [], targets: []};
+  const interactive = [...overlay.querySelectorAll('a[href], button, [role="button"], [role="tab"], [role="radio"]')];
+  const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+  const countPattern = /^\d+\s+(?:голос(?:а|ов)?|votes?)$/i;
+  const optionCountPattern = /^.{1,120}\(\s*\d+\s*\)$/;
+  const controls = [];
+  const targets = [];
+  for (const el of interactive) {
+    const label = normalize(el.innerText) || normalize(el.getAttribute('aria-label')) || normalize(el.title);
+    const visible = !!(el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden');
+    controls.push({tag: el.tagName.toLowerCase(), role: el.getAttribute('role'), label: label.slice(0, 240), visible});
+    if (!visible || (!countPattern.test(label) && !optionCountPattern.test(label))) continue;
+    const index = targets.length;
+    const key = `scraper-poll-option-${arg.key}-${index}`;
+    el.setAttribute('data-scraper-poll-option', key);
+    targets.push({key, index, label, tag: el.tagName.toLowerCase(), role: el.getAttribute('role')});
+  }
+  return {has_overlay: true, controls, targets};
+}"""
+
+POLL_OVERLAY_SCROLL_SCRIPT = r"""() => {
+  const overlays = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [role="tooltip"]')];
+  const overlay = overlays[overlays.length - 1];
+  if (!overlay) return {ok: false, reason: 'overlay_missing'};
+  const candidates = [...overlay.querySelectorAll('*')].filter(el => {
+    const style = getComputedStyle(el);
+    return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20;
+  }).sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  const scroller = candidates[0];
+  if (!scroller) return {ok: false, reason: 'no_scrollable_voter_list'};
+  const before = scroller.scrollTop;
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  scroller.scrollTop = Math.min(max, before + Math.max(180, Math.floor(scroller.clientHeight * 0.7)));
+  return {
+    ok: scroller.scrollTop !== before,
+    reason: scroller.scrollTop !== before ? 'scrolled_overlay' : 'overlay_scroll_at_end',
+    before, after: scroller.scrollTop, max,
+    scroller_class: typeof scroller.className === 'string' ? scroller.className.slice(0, 160) : ''
   };
 }"""
 
@@ -626,6 +673,41 @@ async def is_target_post_open(page: Page, post_id: str, messages: list[dict[str,
     return False
 
 
+async def capture_overlay_voters(page: Page, max_scrolls: int = 30) -> dict[str, Any]:
+    """Collect all user rows rendered in a poll overlay, scrolling only that overlay when needed."""
+    state = await page.evaluate(VOTER_VIEW_SCRIPT)
+    if not state.get("has_overlay"):
+        state["overlay_scroll_steps"] = 0
+        state["overlay_scroll_trace"] = []
+        return state
+
+    found: dict[str, dict[str, Any]] = {}
+    scroll_trace: list[dict[str, Any]] = []
+    for _ in range(max_scrolls + 1):
+        state = await page.evaluate(VOTER_VIEW_SCRIPT)
+        for user in state.get("users", []):
+            key = user.get("id") or user.get("name")
+            if key:
+                found[key] = user
+        if len(scroll_trace) >= max_scrolls:
+            break
+        scroll_state = await page.evaluate(POLL_OVERLAY_SCROLL_SCRIPT)
+        scroll_trace.append(scroll_state)
+        if not scroll_state.get("ok"):
+            break
+        await page.wait_for_timeout(200)
+
+    state = await page.evaluate(VOTER_VIEW_SCRIPT)
+    for user in state.get("users", []):
+        key = user.get("id") or user.get("name")
+        if key:
+            found[key] = user
+    state["users"] = list(found.values())
+    state["overlay_scroll_steps"] = sum(bool(item.get("ok")) for item in scroll_trace)
+    state["overlay_scroll_trace"] = scroll_trace
+    return state
+
+
 async def inspect_poll_voters(
     page: Page,
     context: BrowserContext,
@@ -640,6 +722,7 @@ async def inspect_poll_voters(
     for message in messages:
         text = message.get("text", "")
         poll_text = "\n".join([text, *(p.get("text", "") for p in message.get("polls", []))])
+        completed_poll = bool(re.search(r"опрос.*(?:заверш[её]н|закрыт)|poll.*(?:ended|closed)", poll_text, re.IGNORECASE))
         if not message.get("polls") and not re.search(r"опрос|poll|голос|vote", poll_text, re.IGNORECASE):
             continue
         sequence += 1
@@ -648,6 +731,7 @@ async def inspect_poll_voters(
             "message_id": message.get("message_id"),
             "dom_id": dom_id,
             "message_text_preview": text[:1200],
+            "completed_poll": completed_poll,
             "status": "started",
             "targets": [],
         }
@@ -834,6 +918,62 @@ async def inspect_poll_voters(
                     item["results"] = result_pages
                     item["status"] = "captured" if result_pages else "clicked_but_no_page_capture"
                     user_count = sum(len(result.get("users", [])) for result in result_pages)
+
+                    # A closed poll's result overlay may default to the first answer only. Inspect its option tabs too.
+                    if completed_poll and not page.is_closed() and any(result.get("has_overlay") for result in result_pages):
+                        overlay_info = await page.evaluate(
+                            POLL_OVERLAY_TARGETS_SCRIPT,
+                            {"key": f"{sequence}-{target.get('index', 0)}"},
+                        )
+                        item["overlay_controls"] = overlay_info.get("controls", [])
+                        item["overlay_voter_lists"] = []
+                        print(
+                            f"[poll-voters] completed-poll overlay controls: "
+                            f"{[control.get('label') for control in item['overlay_controls']]}"
+                        )
+                        for option in overlay_info.get("targets", []):
+                            refreshed_options = await page.evaluate(
+                                POLL_OVERLAY_TARGETS_SCRIPT,
+                                {"key": f"{sequence}-{target.get('index', 0)}-refresh"},
+                            )
+                            current_option = next(
+                                (candidate for candidate in refreshed_options.get("targets", [])
+                                 if candidate.get("index") == option.get("index")
+                                 and candidate.get("label") == option.get("label")),
+                                None,
+                            )
+                            if current_option is None:
+                                item["overlay_voter_lists"].append({
+                                    "label": option.get("label"),
+                                    "status": "option_control_missing_on_recheck",
+                                })
+                                continue
+                            option_button = page.locator(
+                                f'[data-scraper-poll-option="{current_option["key"]}"]'
+                            )
+                            try:
+                                await option_button.scroll_into_view_if_needed(timeout=2500)
+                                await option_button.click(timeout=3000)
+                                await page.wait_for_timeout(250)
+                                option_result = await capture_overlay_voters(page)
+                                item["overlay_voter_lists"].append({
+                                    "label": option.get("label"),
+                                    "clicked": True,
+                                    "result": option_result,
+                                })
+                                option_user_count = len(option_result.get("users", []))
+                                user_count += option_user_count
+                                print(
+                                    f"[poll-voters] option {option.get('label')!r}: "
+                                    f"visible_user_rows={option_user_count}, scroll_steps={option_result.get('overlay_scroll_steps', 0)}"
+                                )
+                            except Exception as exc:
+                                item["overlay_voter_lists"].append({
+                                    "label": option.get("label"),
+                                    "status": "option_click_error",
+                                    "error": str(exc),
+                                })
+
                     print(
                         f"[poll-voters] result for {target.get('label')!r}: pages={len(result_pages)}, "
                         f"visible_user_rows={user_count}, url={item.get('url_after')!r}"
@@ -1010,9 +1150,21 @@ async def scrape_one_post(
                                 "href": target.get("href"),
                                 "url_after": target.get("url_after"),
                                 "opened_page_count": target.get("opened_page_count"),
-                                "visible_user_rows": sum(
-                                    len(result.get("users", [])) for result in target.get("results", [])
+                                "visible_user_rows": (
+                                    sum(len(result.get("users", [])) for result in target.get("results", []))
+                                    + sum(
+                                        len(option.get("result", {}).get("users", []))
+                                        for option in target.get("overlay_voter_lists", [])
+                                    )
                                 ),
+                                "overlay_option_lists": [
+                                    {
+                                        "label": option.get("label"),
+                                        "status": option.get("status", "captured"),
+                                        "visible_user_rows": len(option.get("result", {}).get("users", [])),
+                                    }
+                                    for option in target.get("overlay_voter_lists", [])
+                                ],
                             }
                             for target in event.get("targets", [])
                         ],
