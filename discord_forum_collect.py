@@ -66,7 +66,9 @@ MESSAGE_SCRIPT = r"""() => {
     const authorId = authorNode?.getAttribute('data-user-id') || null;
     const visibleUsers = [...el.querySelectorAll('[data-user-id]')].map(user => ({
       id: user.getAttribute('data-user-id'),
-      name: (user.innerText || user.getAttribute('aria-label') || user.getAttribute('alt') || '').trim()
+      name: (user.innerText || user.getAttribute('aria-label') || user.getAttribute('alt') || '').trim(),
+      roles: [...user.querySelectorAll('[class*="role" i]')]
+        .map(role => (role.innerText || role.getAttribute('aria-label') || '').trim()).filter(Boolean)
     })).filter(user => user.id && user.name);
     const timeEl = el.querySelector('time[datetime]');
     const attachments = [...el.querySelectorAll('a[href]')]
@@ -122,8 +124,15 @@ THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
   })).filter(x => x.text || x.aria_label || x.title);
   const visible_users = [...root.querySelectorAll('[data-user-id]')].map(el => ({
     id: el.getAttribute('data-user-id'),
-    name: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim()
+    name: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim(),
+    roles: [...el.querySelectorAll('[class*="role" i]')]
+      .map(role => (role.innerText || role.getAttribute('aria-label') || '').trim()).filter(Boolean)
   })).filter(x => x.id && x.name);
+  const polls = [...root.querySelectorAll('[data-poll], [class*="poll" i]')].map(el => ({
+    text: (el.innerText || '').trim(),
+    data_poll: el.getAttribute('data-poll'),
+    aria_label: el.getAttribute('aria-label')
+  })).filter(x => x.text || x.data_poll || x.aria_label);
   const elements = [...root.querySelectorAll('[data-list-item-id], [data-message-id], [id*="chat-messages"], [data-poll]')]
     .slice(0, 150).map(el => ({
       tag: el.tagName,
@@ -147,6 +156,7 @@ THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
     timestamps: [...root.querySelectorAll('time[datetime]')].map(el => ({datetime: el.dateTime, label: el.getAttribute('aria-label')})),
     visible_users: [...new Map(visible_users.map(user => [user.id, user])).values()],
     controls,
+    polls,
     elements
   };
 }"""
@@ -375,6 +385,54 @@ async def scroll_and_collect_forum(page: Page, guild_id: str, channel_id: str, m
     return posts
 
 
+async def open_forum_post(
+    page: Page,
+    guild_id: str,
+    channel_id: str,
+    post_id: str,
+    max_scrolls: int,
+    output_dir: Path,
+    browser_errors: list[str],
+) -> dict[str, Any]:
+    """Find a forum card in the list and click it; direct URL navigation alone only loads the list in some Discord builds."""
+    channel_url = f"https://discord.com/channels/{guild_id}/{channel_id}"
+    await page.goto(channel_url, wait_until="domcontentloaded")
+    await page.wait_for_timeout(1800)
+    list_item_id = f"forum-channel-list-{channel_id}___{post_id}"
+    locator = page.locator(f'[data-list-item-id="{list_item_id}"]')
+
+    for _ in range(max_scrolls):
+        if await locator.count():
+            break
+        await page.evaluate(
+            "() => { const el = (%s)(%s); el.scrollTop += Math.max(400, el.clientHeight * 0.85); }"
+            % (SCROLLER_SCRIPT, json.dumps(channel_id))
+        )
+        await page.wait_for_timeout(750)
+    if not await locator.count():
+        bundle = await save_debug_bundle(
+            page, output_dir, f"Target forum post {post_id} not found in the scrolled list", guild_id, channel_id, browser_errors
+        )
+        raise RuntimeError(f"Не нашёл публикацию {post_id} в списке после прокрутки. Архив диагностики: {bundle}")
+
+    metadata = next(
+        (item for item in await page.evaluate(THREAD_LINKS_SCRIPT, {"guild": guild_id, "channel": channel_id})
+         if item["id"] == post_id),
+        {},
+    )
+    await locator.scroll_into_view_if_needed()
+    await locator.click()
+    try:
+        await page.wait_for_function(
+            "postId => location.pathname.endsWith('/' + postId)", arg=post_id, timeout=20_000
+        )
+    except PlaywrightTimeoutError:
+        # Some client builds open the post pane without changing the route.
+        await page.wait_for_timeout(2500)
+    await page.wait_for_timeout(1800)
+    return metadata
+
+
 async def collect_messages(page: Page, max_scrolls: int) -> list[dict]:
     gathered: dict[str, dict] = {}
     stable = 0
@@ -495,7 +553,20 @@ async def main_async(args: argparse.Namespace) -> None:
             ) from exc
         await page.wait_for_timeout(2500)
 
-        posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
+        if args.post_id:
+            posts = {
+                args.post_id: {
+                    "id": args.post_id,
+                    "url": f"https://discord.com/channels/{guild_id}/{channel_id}/{args.post_id}",
+                    "title": "",
+                    "author": None,
+                    "created_at": None,
+                    "preview_text": None,
+                    "tags": [],
+                }
+            }
+        else:
+            posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
         if not posts:
             bundle = await save_debug_bundle(
                 page, output_dir, "Channel loaded but no forum cards were detected", guild_id, channel_id, browser_errors
@@ -506,14 +577,19 @@ async def main_async(args: argparse.Namespace) -> None:
                 "перед отправкой проверьте видимые фрагменты сообщений и имена."
             )
 
-        output_path = output_dir / "posts.jsonl"
+        output_path = output_dir / (f"post_{args.post_id}_test.jsonl" if args.post_id else "posts.jsonl")
         total_messages = 0
         with output_path.open("w", encoding="utf-8") as out:
             for index, post in enumerate(posts.values(), 1):
                 print(f"[{index}/{len(posts)}] Собираю публикацию {post['id']}…")
                 try:
-                    await page.goto(post["url"], wait_until="domcontentloaded")
-                    await page.wait_for_timeout(3000)
+                    if args.post_id:
+                        post.update(await open_forum_post(
+                            page, guild_id, channel_id, args.post_id, args.max_scrolls, output_dir, browser_errors
+                        ))
+                    else:
+                        await page.goto(post["url"], wait_until="domcontentloaded")
+                        await page.wait_for_timeout(3000)
                     messages = await collect_messages(page, args.max_scrolls)
                     for message in messages:
                         message["thread_id"] = post["id"]
@@ -565,6 +641,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-o", "--output", default="discord_forum_export", help="Папка экспорта")
     parser.add_argument("--profile", default=".discord_browser_profile", help="Локальный профиль Chromium для сессии Discord")
     parser.add_argument("--max-scrolls", type=int, default=250, help="Лимит прокруток на форум/публикацию")
+    parser.add_argument("--post-id", default="", help="Тестовый режим: собрать только одну публикацию по ID")
     parser.add_argument("--wait-timeout", type=int, default=600, help="Сколько секунд ждать авторизацию и появления публикаций")
     parser.add_argument("--no-download-files", dest="download_files", action="store_false", help="Не скачивать вложения, только сохранить ссылки")
     parser.set_defaults(download_files=True)
@@ -573,6 +650,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--max-scrolls must be at least 1")
     if args.wait_timeout < 1:
         parser.error("--wait-timeout must be at least 1")
+    if args.post_id and not re.fullmatch(r"[0-9]{16,22}", args.post_id):
+        parser.error("--post-id must be a Discord snowflake (16–22 digits)")
     return args
 
 

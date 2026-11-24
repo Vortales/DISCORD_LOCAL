@@ -30,6 +30,7 @@ class ForumCollectorGUI:
 
         self.guild_var = tk.StringVar(value=DEFAULT_GUILD_ID)
         self.channel_var = tk.StringVar(value=DEFAULT_CHANNEL_ID)
+        self.post_id_var = tk.StringVar(value="1569385787621900359")
         self.output_var = tk.StringVar(value=str(SCRIPT_DIR / "discord_forum_export"))
         self.timeout_var = tk.StringVar(value="600")
         self.download_var = tk.BooleanVar(value=True)
@@ -50,25 +51,30 @@ class ForumCollectorGUI:
         ttk.Label(form, text="ID форум-канала:").grid(row=1, column=0, sticky="w", **pad)
         ttk.Entry(form, textvariable=self.channel_var).grid(row=1, column=1, sticky="ew", **pad)
 
-        ttk.Label(form, text="Папка экспорта:").grid(row=2, column=0, sticky="w", **pad)
-        ttk.Entry(form, textvariable=self.output_var).grid(row=2, column=1, sticky="ew", **pad)
-        ttk.Button(form, text="Обзор…", command=self._choose_output).grid(row=2, column=2, **pad)
+        ttk.Label(form, text="ID публикации для точечного теста (пусто = весь канал):").grid(
+            row=2, column=0, sticky="w", **pad
+        )
+        ttk.Entry(form, textvariable=self.post_id_var).grid(row=2, column=1, sticky="ew", **pad)
 
-        ttk.Label(form, text="Ожидать вход и загрузку (сек.):").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Label(form, text="Папка экспорта:").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Entry(form, textvariable=self.output_var).grid(row=3, column=1, sticky="ew", **pad)
+        ttk.Button(form, text="Обзор…", command=self._choose_output).grid(row=3, column=2, **pad)
+
+        ttk.Label(form, text="Ожидать вход и загрузку (сек.):").grid(row=4, column=0, sticky="w", **pad)
         ttk.Spinbox(form, from_=60, to=3600, increment=60, textvariable=self.timeout_var, width=10).grid(
-            row=3, column=1, sticky="w", **pad
+            row=4, column=1, sticky="w", **pad
         )
         ttk.Checkbutton(form, text="Скачивать вложенные файлы", variable=self.download_var).grid(
-            row=4, column=1, sticky="w", **pad
+            row=5, column=1, sticky="w", **pad
         )
 
         note = (
             "Скрипт откроет Chromium; войдите в Discord в этом окне, если потребуется. "
-            "Будут сохранены публикации, сообщения, даты, авторы, ссылки/вложения, теги и видимые данные опросов/реакций. "
-            "Имена проголосовавших сохраняются только если Discord показывает их в интерфейсе; скрипт не нажимает кнопки голосования."
+            "Если заполнен ID публикации, будет собрана только она (тестовый режим). Сохраняются видимые сообщения, даты, авторы, вложения и данные опросов/реакций. "
+            "Имена/роли голосовавших попадут в экспорт, только если Discord отображает их в интерфейсе; скрипт не голосует."
         )
         ttk.Label(form, text=note, wraplength=740, justify="left").grid(
-            row=5, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
+            row=6, column=0, columnspan=3, sticky="ew", padx=8, pady=(8, 10)
         )
 
         controls = ttk.Frame(self.root, padding=(10, 0, 10, 5))
@@ -107,8 +113,12 @@ class ForumCollectorGUI:
             return
         guild_id = self.guild_var.get().strip()
         channel_id = self.channel_var.get().strip()
+        post_id = self.post_id_var.get().strip()
         if not guild_id.isdigit() or not channel_id.isdigit():
             messagebox.showerror("Неверные ID", "Введите числовые ID сервера и форум-канала.")
+            return
+        if post_id and (not post_id.isdigit() or not 16 <= len(post_id) <= 22):
+            messagebox.showerror("Неверный ID публикации", "ID публикации должен содержать 16–22 цифры, либо оставьте поле пустым.")
             return
         try:
             timeout = int(self.timeout_var.get())
@@ -127,6 +137,8 @@ class ForumCollectorGUI:
             "--profile", str(SCRIPT_DIR / ".discord_browser_profile"),
             "--wait-timeout", str(timeout),
         ]
+        if post_id:
+            command.extend(["--post-id", post_id])
         if not self.download_var.get():
             command.append("--no-download-files")
 
