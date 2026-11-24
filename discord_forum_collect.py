@@ -42,7 +42,7 @@ def ensure_playwright_package() -> None:
 
 
 ensure_playwright_package()
-from playwright.async_api import async_playwright, Page, BrowserContext  # noqa: E402
+from playwright.async_api import async_playwright, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError  # noqa: E402
 
 
 DEFAULT_GUILD_ID = "1514607659758653560"
@@ -240,17 +240,37 @@ async def main_async(args: argparse.Namespace) -> None:
         )
         page = context.pages[0] if context.pages else await context.new_page()
         await page.goto(channel_url, wait_until="domcontentloaded")
-        print("Если потребуется, войдите в Discord в окне браузера. Ожидаю загрузку форум-канала…")
-        await page.wait_for_function(
-            "([guild, channel]) => location.pathname.startsWith(`/channels/${guild}/${channel}`)",
-            arg=[guild_id, channel_id],
-            timeout=300_000,
+        print(
+            "Если Discord попросит войти, сделайте это в открытом окне. "
+            f"Скрипт ждёт появления публикаций (до {args.wait_timeout} сек.)…"
         )
-        await page.wait_for_timeout(5000)
+        try:
+            await page.wait_for_function(
+                "([guild, channel]) => [...document.querySelectorAll('a[href]')].some(a => { "
+                "const p = new URL(a.href).pathname.split('/'); "
+                "return p[1] === 'channels' && p[2] === guild && p[3] === channel && "
+                "/^[0-9]+$/.test(p[4] || ''); })",
+                arg=[guild_id, channel_id],
+                timeout=args.wait_timeout * 1000,
+            )
+        except PlaywrightTimeoutError as exc:
+            screenshot = output_dir / "forum-load-timeout.png"
+            await page.screenshot(path=str(screenshot), full_page=False)
+            raise RuntimeError(
+                "Публикации не появились за отведённое время. Проверьте, что вход в Discord завершён, "
+                "ID верны и форум открылся. Снимок экрана для диагностики сохранён в "
+                f"{screenshot}."
+            ) from exc
+        await page.wait_for_timeout(2500)
 
         posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
         if not posts:
-            print("Не нашёл ссылок на публикации. Проверьте ID сервера/канала и доступ к форуму.", file=sys.stderr)
+            screenshot = output_dir / "forum-no-post-links.png"
+            await page.screenshot(path=str(screenshot), full_page=False)
+            raise RuntimeError(
+                "Форум открылся, но ссылки на публикации не найдены. Возможно, Discord изменил разметку сайта; "
+                f"снимок текущего окна сохранён в {screenshot}."
+            )
 
         output_path = output_dir / "posts.jsonl"
         total_messages = 0
@@ -292,11 +312,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-o", "--output", default="discord_forum_export", help="Папка экспорта")
     parser.add_argument("--profile", default=".discord_browser_profile", help="Локальный профиль Chromium для сессии Discord")
     parser.add_argument("--max-scrolls", type=int, default=250, help="Лимит прокруток на форум/публикацию")
+    parser.add_argument("--wait-timeout", type=int, default=600, help="Сколько секунд ждать авторизацию и появления публикаций")
     parser.add_argument("--no-download-files", dest="download_files", action="store_false", help="Не скачивать вложения, только сохранить ссылки")
     parser.set_defaults(download_files=True)
     args = parser.parse_args()
     if args.max_scrolls < 1:
         parser.error("--max-scrolls must be at least 1")
+    if args.wait_timeout < 1:
+        parser.error("--wait-timeout must be at least 1")
     return args
 
 
