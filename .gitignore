@@ -1,0 +1,7 @@
+# Local Discord session (contains account data)
+.discord_browser_profile/
+
+# Collector output and Python cache
+/discord_forum_export/
+__pycache__/
+*.py[cod]
