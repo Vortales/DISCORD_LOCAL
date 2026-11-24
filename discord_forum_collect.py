@@ -52,9 +52,14 @@ DEFAULT_FORUM_CHANNEL_ID = "1515423283606982776"
 
 
 MESSAGE_SCRIPT = r"""() => {
-  const nodes = [...document.querySelectorAll('[id^="chat-messages-"]')];
+  const selector = '[id^="chat-messages-"], [data-list-item-id*="chat-messages"], '
+    + '[data-message-id], [class*="messageListItem"], li[class*="message"]';
+  const nodes = [...new Set(document.querySelectorAll(selector))];
   return nodes.map(el => {
     const id = el.id || '';
+    const sourceId = el.getAttribute('data-message-id') || el.getAttribute('data-list-item-id') || id;
+    const numericIds = sourceId.match(/[0-9]{16,22}/g) || [];
+    const messageId = numericIds.length ? numericIds[numericIds.length - 1] : id.split('-').pop();
     const authorEl = el.querySelector('[id^="message-username-"]')
       || el.querySelector('[class*="username"]');
     const authorNode = authorEl?.closest('[data-user-id]') || el.querySelector('[data-user-id]');
@@ -78,9 +83,18 @@ MESSAGE_SCRIPT = r"""() => {
         `${item.text} ${item.aria_label || ''} ${item.title || ''}`
       )
     );
+    const pollElements = [
+      ...(el.matches('[data-poll], [class*="poll" i]') ? [el] : []),
+      ...el.querySelectorAll('[data-poll], [class*="poll" i]')
+    ];
+    const polls = [...new Set(pollElements)].map(poll => ({
+      text: (poll.innerText || '').trim(),
+      data_poll: poll.getAttribute('data-poll'),
+      aria_label: poll.getAttribute('aria-label')
+    })).filter(poll => poll.text || poll.data_poll || poll.aria_label);
     return {
-      dom_id: id,
-      message_id: id.split('-').pop(),
+      dom_id: sourceId || id,
+      message_id: messageId,
       author: authorEl ? (authorEl.innerText || '').trim() : null,
       author_id: authorId,
       visible_users: [...new Map(visibleUsers.map(user => [user.id, user])).values()],
@@ -89,9 +103,52 @@ MESSAGE_SCRIPT = r"""() => {
       text,
       attachments,
       poll_or_reaction_details,
+      polls,
       visible_controls: controls
     };
   }).filter(m => m.dom_id && (m.text || m.attachments.length));
+}"""
+
+THREAD_PAGE_SNAPSHOT_SCRIPT = r"""({postTitle}) => {
+  const root = document.querySelector(
+    '[data-list-id*="chat-messages"], [data-list-id*="forum-post"], [data-list-id*="thread"], '
+    + '[role="dialog"], [role="tabpanel"], [class*="threadSidebar"], [role="main"], main'
+  ) || document.body;
+  const controls = [...root.querySelectorAll('button, [role="button"]')].map(el => ({
+    text: (el.innerText || '').trim(),
+    aria_label: el.getAttribute('aria-label'),
+    title: el.getAttribute('title'),
+    data_list_item_id: el.getAttribute('data-list-item-id')
+  })).filter(x => x.text || x.aria_label || x.title);
+  const visible_users = [...root.querySelectorAll('[data-user-id]')].map(el => ({
+    id: el.getAttribute('data-user-id'),
+    name: (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim()
+  })).filter(x => x.id && x.name);
+  const elements = [...root.querySelectorAll('[data-list-item-id], [data-message-id], [id*="chat-messages"], [data-poll]')]
+    .slice(0, 150).map(el => ({
+      tag: el.tagName,
+      id: el.id,
+      role: el.getAttribute('role'),
+      data_list_item_id: el.getAttribute('data-list-item-id'),
+      data_message_id: el.getAttribute('data-message-id'),
+      data_poll: el.getAttribute('data-poll'),
+      class_name: typeof el.className === 'string' ? el.className.slice(0, 120) : '',
+      text: (el.innerText || '').trim().slice(0, 500)
+    }));
+  return {
+    url: location.href.split('?')[0],
+    title: document.title,
+    root: {tag: root.tagName, id: root.id, role: root.getAttribute('role')},
+    text: (() => {
+      const fullText = (root.innerText || '').trim();
+      const titleIndex = postTitle ? fullText.indexOf(postTitle) : -1;
+      return (titleIndex >= 0 ? fullText.slice(titleIndex) : fullText.slice(-16000)).slice(0, 16000);
+    })(),
+    timestamps: [...root.querySelectorAll('time[datetime]')].map(el => ({datetime: el.dateTime, label: el.getAttribute('aria-label')})),
+    visible_users: [...new Map(visible_users.map(user => [user.id, user])).values()],
+    controls,
+    elements
+  };
 }"""
 
 THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
@@ -172,13 +229,37 @@ THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
   return [...found.values()];
 }"""
 
-SCROLLER_SCRIPT = r"""() => {
-  const main = document.querySelector('main') || document.body;
-  const candidates = [...main.querySelectorAll('*')]
-    .filter(el => {
-      const s = getComputedStyle(el);
-      return /(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 80;
-    });
+SCROLLER_SCRIPT = r"""channel => {
+  const marker = `forum-channel-list-${channel}___`;
+  const items = [...document.querySelectorAll(`[data-list-item-id^="${marker}"]`)];
+  const item = items.find(el => /^[0-9]{16,22}$/.test(el.getAttribute('data-list-item-id').slice(marker.length))) || items[0];
+  for (let el = item; el && el !== document.body; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) return el;
+  }
+  const root = document.querySelector('main, [role="main"], #app-mount') || document.body;
+  const candidates = [...root.querySelectorAll('*')].filter(el => {
+    const style = getComputedStyle(el);
+    return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80;
+  });
+  candidates.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
+  return candidates[0] || document.scrollingElement || document.documentElement;
+}"""
+
+MESSAGE_SCROLLER_SCRIPT = r"""() => {
+  const marker = document.querySelector(
+    '[data-list-id="chat-messages"], [data-list-id*="chat-messages"], '
+    + '[id^="chat-messages-"], [data-list-item-id*="chat-messages"]'
+  );
+  for (let el = marker; el && el !== document.body; el = el.parentElement) {
+    const style = getComputedStyle(el);
+    if (/(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) return el;
+  }
+  const root = document.querySelector('main, [role="main"], #app-mount') || document.body;
+  const candidates = [...root.querySelectorAll('*')].filter(el => {
+    const style = getComputedStyle(el);
+    return /(auto|scroll)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80;
+  });
   candidates.sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight));
   return candidates[0] || document.scrollingElement || document.documentElement;
 }"""
@@ -271,9 +352,9 @@ async def scroll_and_collect_forum(page: Page, guild_id: str, channel_id: str, m
         if no_growth >= 4:
             break
         await page.evaluate("""() => {
-          const el = (%s)();
+          const el = (%s)(%s);
           el.scrollTop += Math.max(400, el.clientHeight * 0.8);
-        }""" % SCROLLER_SCRIPT)
+        }""" % (SCROLLER_SCRIPT, json.dumps(channel_id)))
         await page.wait_for_timeout(850)
 
     # Some forum layouts load older cards at the top instead of the bottom.
@@ -289,7 +370,7 @@ async def scroll_and_collect_forum(page: Page, guild_id: str, channel_id: str, m
             last_count = len(posts)
         if no_growth >= 4:
             break
-        await page.evaluate("""() => { const el = (%s)(); el.scrollTop = 0; }""" % SCROLLER_SCRIPT)
+        await page.evaluate("""() => { const el = (%s)(%s); el.scrollTop = 0; }""" % (SCROLLER_SCRIPT, json.dumps(channel_id)))
         await page.wait_for_timeout(850)
     return posts
 
@@ -306,19 +387,9 @@ async def collect_messages(page: Page, max_scrolls: int) -> list[dict]:
         else:
             stable = 0
             previous = len(gathered)
-        if stable >= 4:
+        if stable >= (7 if gathered else 4):
             break
-        await page.evaluate("""() => {
-          const list = document.querySelector('[data-list-id="chat-messages"]');
-          let el = list;
-          while (el && el !== document.body) {
-            const s = getComputedStyle(el);
-            if (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 20) break;
-            el = el.parentElement;
-          }
-          if (!el || el === document.body) el = document.scrollingElement || document.documentElement;
-          el.scrollTop = 0;
-        }""")
+        await page.evaluate("() => { const el = (%s)(); el.scrollTop = 0; }" % MESSAGE_SCROLLER_SCRIPT)
         await page.wait_for_timeout(900)
     return sorted(gathered.values(), key=lambda m: (m.get("timestamp") or "", m["message_id"]))
 
@@ -442,10 +513,15 @@ async def main_async(args: argparse.Namespace) -> None:
                 print(f"[{index}/{len(posts)}] Собираю публикацию {post['id']}…")
                 try:
                     await page.goto(post["url"], wait_until="domcontentloaded")
-                    await page.wait_for_timeout(1800)
+                    await page.wait_for_timeout(3000)
                     messages = await collect_messages(page, args.max_scrolls)
                     for message in messages:
                         message["thread_id"] = post["id"]
+                    thread_snapshot = None
+                    if not messages:
+                        thread_snapshot = await page.evaluate(
+                            THREAD_PAGE_SNAPSHOT_SCRIPT, {"postTitle": post.get("title", "")}
+                        )
                     title = post.get("title") or await page.title()
                     record = {
                         "type": "post",
@@ -460,6 +536,7 @@ async def main_async(args: argparse.Namespace) -> None:
                         "tags": post.get("tags", []),
                         "url": post["url"],
                         "messages": messages,
+                        "thread_snapshot": thread_snapshot,
                     }
                     if args.download_files:
                         await download_attachments(context, messages, output_dir / "attachments" / post["id"])
@@ -469,6 +546,14 @@ async def main_async(args: argparse.Namespace) -> None:
                 except Exception as exc:
                     print(f"Warning: publication {post['id']} skipped: {exc}", file=sys.stderr)
 
+        if total_messages == 0:
+            bundle = await save_debug_bundle(
+                page, output_dir, "No message roots detected inside any forum post", guild_id, channel_id, browser_errors
+            )
+            print(
+                "Warning: карточки собраны, но message DOM-селекторы не нашли сообщений. "
+                f"В posts.jsonl добавлен видимый снимок каждой публикации; диагностика: {bundle}"
+            )
         print(f"Готово: {len(posts)} публикаций, {total_messages} сообщений. Результат: {output_path}")
         await context.close()
 
