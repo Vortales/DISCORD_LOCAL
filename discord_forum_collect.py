@@ -117,6 +117,38 @@ THREAD_LINKS_SCRIPT = r"""({guild, channel}) => {
       tags: [...new Set(tags)]
     });
   }
+  // Discord sometimes renders forum cards as clickable divs instead of anchors.
+  const cards = document.querySelectorAll(
+    '[data-post-id], [data-list-item-id*="forum" i], [id*="forum-post" i], article, [role="article"]'
+  );
+  for (const card of cards) {
+    const attrs = [...card.attributes].map(a => `${a.name}=${a.value}`).join(' ');
+    const directId = card.getAttribute('data-post-id');
+    if (!directId && !/forum|post/i.test(attrs)) continue;
+    const routePrefix = `/channels/${guild}/${channel}/`;
+    const routeIndex = attrs.indexOf(routePrefix);
+    const routeTail = routeIndex >= 0 ? attrs.slice(routeIndex + routePrefix.length) : '';
+    const routeId = routeTail.match(/^[0-9]{16,22}/);
+    let postId = routeId ? routeId[0] : null;
+    if (!postId) {
+      const idMatch = (directId || attrs).match(/[0-9]{16,22}/);
+      if (idMatch) postId = idMatch[0];
+    }
+    if (!postId || found.has(postId)) continue;
+    const timeEl = card.querySelector('time[datetime]');
+    const authorEl = card.querySelector('[id^="message-username-"], [class*="username"]');
+    const authorNode = authorEl?.closest('[data-user-id]') || card.querySelector('[data-user-id]');
+    found.set(postId, {
+      id: postId,
+      url: `https://discord.com/channels/${guild}/${channel}/${postId}`,
+      title: (card.querySelector('h1, h2, h3, [role="heading"]')?.innerText || '').trim(),
+      author: authorEl ? (authorEl.innerText || '').trim() : null,
+      author_id: authorNode?.getAttribute('data-user-id') || null,
+      created_at: timeEl ? timeEl.dateTime : null,
+      preview_text: (card.innerText || '').trim().slice(0, 4000),
+      tags: [...new Set([...card.querySelectorAll('[class*="tag"]')].map(tag => (tag.innerText || '').trim()).filter(Boolean))]
+    });
+  }
   return [...found.values()];
 }"""
 
@@ -278,10 +310,10 @@ async def main_async(args: argparse.Namespace) -> None:
         )
         try:
             await page.wait_for_function(
-                "([guild, channel]) => [...document.querySelectorAll('a[href]')].some(a => { "
-                "const p = new URL(a.href).pathname.split('/'); "
-                "return p[1] === 'channels' && p[2] === guild && p[3] === channel && "
-                "/^[0-9]+$/.test(p[4] || ''); })",
+                "([guild, channel]) => location.pathname.startsWith(`/channels/${guild}/${channel}`) "
+                "&& !document.querySelector('input[type=\\\"password\\\"]') "
+                "&& !!document.querySelector('main') "
+                "&& (document.body.innerText || '').trim().length > 80",
                 arg=[guild_id, channel_id],
                 timeout=args.wait_timeout * 1000,
             )
@@ -298,10 +330,29 @@ async def main_async(args: argparse.Namespace) -> None:
         posts = await scroll_and_collect_forum(page, guild_id, channel_id, args.max_scrolls)
         if not posts:
             screenshot = output_dir / "forum-no-post-links.png"
+            debug_path = output_dir / "forum-dom-debug.json"
             await page.screenshot(path=str(screenshot), full_page=False)
+            debug_data = await page.evaluate("""() => {
+              const candidates = [...document.querySelectorAll(
+                'article, [role="article"], [data-post-id], [data-list-item-id], [id*="forum" i]'
+              )].slice(0, 60).map(el => ({
+                tag: el.tagName,
+                id: el.id,
+                role: el.getAttribute('role'),
+                class_name: typeof el.className === 'string' ? el.className.slice(0, 180) : '',
+                data_post_id: el.getAttribute('data-post-id'),
+                data_list_item_id: el.getAttribute('data-list-item-id'),
+                text_preview: (el.innerText || '').trim().slice(0, 140)
+              }));
+              const links = [...document.querySelectorAll('a[href*="/channels/"]')].slice(0, 60)
+                .map(a => ({href: a.href, text: (a.innerText || '').trim().slice(0, 100)}));
+              return {url: location.href, title: document.title, candidates, links};
+            }""")
+            debug_path.write_text(json.dumps(debug_data, ensure_ascii=False, indent=2), encoding="utf-8")
             raise RuntimeError(
-                "Форум открылся, но ссылки на публикации не найдены. Возможно, Discord изменил разметку сайта; "
-                f"снимок текущего окна сохранён в {screenshot}."
+                "Страница загрузилась, но сборщик не нашёл карточки публикаций. "
+                f"Сохранены снимок {screenshot} и структура DOM {debug_path}; "
+                "в debug-файле могут быть видны имена и фрагменты сообщений — не отправляйте его без проверки/редактирования."
             )
 
         output_path = output_dir / "posts.jsonl"
