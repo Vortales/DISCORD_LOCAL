@@ -1,0 +1,14 @@
+# Local Discord sessions (contains account data)
+.discord_browser_profile/
+**/.discord_browser_profile/
+
+# Per-version GUI settings and collector output
+**/.discord_forum_gui_settings.json
+**/.discord_forum_gui_settings.tmp
+/discord_forum_export/
+**/discord_forum_export/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
