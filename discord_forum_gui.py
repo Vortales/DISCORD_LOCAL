@@ -5,7 +5,7 @@ from pathlib import Path
 import runpy
 
 
-LATEST_GUI = Path(__file__).resolve().parent / "v2" / "discord_forum_gui.py"
+LATEST_GUI = Path(__file__).resolve().parent / "v3" / "discord_forum_gui.py"
 
 if __name__ == "__main__":
     runpy.run_path(str(LATEST_GUI), run_name="__main__")
