@@ -1,0 +1,248 @@
+Выберите «Полный сбор» или «Тест публикации». Первый запуск может установить Playwright и Chromium.
+Запуск (полный сбор до 1569385787621900359 включительно, workers=1): D:\Users\79528\PycharmProjects\PythonProject1\.venv\Scripts\python.exe -u C:\Users\G5KC\Desktop\DISCORD_LOCAL-arena-47f1109e-discord-local\discord_forum_collect.py 1514607659758653560 1515423283606982776 --output C:\Users\G5KC\Desktop\DISCORD_LOCAL-arena-47f1109e-discord-local\discord_forum_export --profile C:\Users\G5KC\Desktop\DISCORD_LOCAL-arena-47f1109e-discord-local\.discord_browser_profile --wait-timeout 600 --workers 8 --stop-after-post-id 1569385787621900359
+C:\Users\G5KC\Desktop\DISCORD_LOCAL-arena-47f1109e-discord-local\discord_forum_collect.py:1121: SyntaxWarning: invalid escape sequence '\s'
+  """arg => {
+Если Discord попросит войти, сделайте это в открытом окне. Скрипт ждёт появления публикаций (до 600 сек.)…
+Ограничение полного сбора: 50 публикаций в порядке обнаружения, последняя включена: 1569385787621900359.
+v3: браузер работает в одной вкладке последовательно; --workers 8 не применяется.
+[1/50] Открываю публикацию 1518236543700041929…
+[1/50] Готово: 1518236543700041929 (1 сообщений)
+[2/50] Открываю публикацию 1574940811584340061…
+[2/50] Готово: 1574940811584340061 (1 сообщений)
+[3/50] Открываю публикацию 1574940038511202525…
+[3/50] Готово: 1574940038511202525 (1 сообщений)
+[4/50] Открываю публикацию 1574395285294284851…
+[4/50] Готово: 1574395285294284851 (1 сообщений)
+[5/50] Открываю публикацию 1574395106675658762…
+[5/50] Готово: 1574395106675658762 (1 сообщений)
+[6/50] Открываю публикацию 1574022262124847124…
+[6/50] Готово: 1574022262124847124 (2 сообщений)
+[7/50] Открываю публикацию 1574022235276968076…
+[7/50] Готово: 1574022235276968076 (2 сообщений)
+[8/50] Открываю публикацию 1574022209331007608…
+[8/50] Готово: 1574022209331007608 (2 сообщений)
+[9/50] Открываю публикацию 1574022183280181298…
+[9/50] Готово: 1574022183280181298 (2 сообщений)
+[10/50] Открываю публикацию 1573014554563313724…
+[poll-voters] message 1573016187753992195: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '10 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '12 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (10)', 'Против (1)', 'Воздержался (1)', 'Ген.Прок | Pravik Killaz | 91999 pravikkk', 'Hau hau337', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Улиткина слюнка🐌 ossaula', 'vobla voblovna', 'MrPocoPo sky_992', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'квикус cyberbadlink', 'pipupipuq pipupipuq', 'Сенатор NG | Hunter K. | 122338 pavelrestl']
+[poll-voters] option 'Против (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '12 голосов': pages=1, visible_user_rows=12, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573014554563313724'
+[poll-voters] message 1573017257716486205: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573014554563313724'
+Warning: publication 1573014554563313724 failed: 'NoneType' object is not iterable
+[11/50] Открываю публикацию 1573008966328520867…
+[poll-voters] message 1573014718166212681: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '9 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] clicking vote_count '10 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (9)', 'Против (1)', 'Воздержался (0)', 'Ген.Прок | Pravik Killaz | 91999 pravikkk', 'Hau hau337', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'ВЦГ | Qwikus Killa | 11736 cyberbadlink', 'pipupipuq pipupipuq', 'Сенатор NG | Hunter K. | 122338 pavelrestl']
+[poll-voters] option 'Против (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '10 голосов': pages=1, visible_user_rows=10, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573008966328520867'
+[poll-voters] message 1573016011110748230: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573008966328520867'
+Warning: publication 1573008966328520867 failed: 'NoneType' object is not iterable
+[12/50] Открываю публикацию 1573007741578911855…
+[poll-voters] message 1573014872487100468: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '12 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '14 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (12)', 'Против (1)', 'Воздержался (1)', 'Ген.Прок | Pravik Killaz | 91999 pravikkk', 'Hau hau337', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Улиткина слюнка🐌 ossaula', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'C | Sanya Nomad | 64890 6a6kabkegax', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'П | Mei Roove | 200618 al.zaru', 'ВЦГ | Qwikus Killa | 11736 cyberbadlink', 'pipupipuq pipupipuq']
+[poll-voters] option 'Против (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '14 голосов': pages=1, visible_user_rows=14, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573007741578911855'
+[poll-voters] message 1573015992550949018: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573007741578911855'
+Warning: publication 1573007741578911855 failed: 'NoneType' object is not iterable
+[13/50] Открываю публикацию 1573006980019130522…
+[poll-voters] message 1573007060919132221: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '13 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] clicking vote_count '13 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (13)', 'Против (0)', 'Воздержался (0)', 'Ген.Прок | Pravik Killaz | 91999 pravikkk', 'Hau hau337', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Улиткина слюнка🐌 ossaula', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'w hs223', 'П | Mei Roove | 200618 al.zaru', 'ВЦГ | Qwikus Killa | 11736 cyberbadlink', 'pipupipuq pipupipuq', 'Сенатор NG | Hunter K. | 122338 pavelrestl']
+[poll-voters] result for '13 голосов': pages=1, visible_user_rows=13, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573006980019130522'
+[poll-voters] message 1573007829831258203: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1573006980019130522'
+Warning: publication 1573006980019130522 failed: 'NoneType' object is not iterable
+[14/50] Открываю публикацию 1572999381098168351…
+[poll-voters] message 1573014413064011817: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '10 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping redundant count '3 голоса'
+[poll-voters] clicking vote_count '14 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (10)', 'Против (1)', 'Воздержался (3)', 'Ген.Прок | Pravik Killaz | 91999 pravikkk', 'Hau hau337', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Улиткина слюнка🐌 ossaula', 'vobla voblovna', 'MrPocoPo sky_992', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'П | Mei Roove | 200618 al.zaru', 'ВЦГ | Qwikus Killa | 11736 cyberbadlink', 'pipupipuq pipupipuq']
+[poll-voters] option 'Против (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] option 'Воздержался (3)': status=captured_after_selection, visible_user_rows=3, scroll_steps=0
+[poll-voters] result for '14 голосов': pages=1, visible_user_rows=14, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572999381098168351'
+[poll-voters] message 1573015990340427826: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572999381098168351'
+Warning: publication 1572999381098168351 failed: 'NoneType' object is not iterable
+[15/50] Открываю публикацию 1572997460270387250…
+[15/50] Готово: 1572997460270387250 (2 сообщений)
+[16/50] Открываю публикацию 1572997432143253564…
+[16/50] Готово: 1572997432143253564 (2 сообщений)
+[17/50] Открываю публикацию 1572997409259389018…
+[17/50] Готово: 1572997409259389018 (2 сообщений)
+[18/50] Открываю публикацию 1572997382914711633…
+[18/50] Готово: 1572997382914711633 (2 сообщений)
+[19/50] Открываю публикацию 1572997358206328942…
+[poll-voters] message 1573013670223413360: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping redundant count '10 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] clicking vote_count '11 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (1)', 'Против (10)', 'Воздержался (0)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp']
+[poll-voters] option 'Против (10)': status=captured_after_selection, visible_user_rows=10, scroll_steps=0
+[poll-voters] result for '11 голосов': pages=1, visible_user_rows=11, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572997358206328942'
+[poll-voters] message 1573013947005800571: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572997358206328942'
+Warning: publication 1572997358206328942 failed: 'NoneType' object is not iterable
+[20/50] Открываю публикацию 1572997327470207216…
+[20/50] Готово: 1572997327470207216 (2 сообщений)
+[21/50] Открываю публикацию 1572997281303760937…
+[poll-voters] message 1573012158550249533: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '4 голоса'
+[poll-voters] skipping redundant count '7 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '12 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (4)', 'Против (7)', 'Воздержался (1)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'Улиткина слюнка🐌 ossaula', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'Сенатор NG | Hunter K. | 122338 pavelrestl']
+[poll-voters] option 'Против (7)': status=captured_after_selection, visible_user_rows=7, scroll_steps=0
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '12 голосов': pages=1, visible_user_rows=12, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572997281303760937'
+[poll-voters] message 1573013404963176629: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1572997281303760937'
+Warning: publication 1572997281303760937 failed: 'NoneType' object is not iterable
+[22/50] Открываю публикацию 1571985718023159929…
+[22/50] Готово: 1571985718023159929 (2 сообщений)
+[23/50] Открываю публикацию 1571978153071485006…
+[poll-voters] message 1573009464288878613: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '4 голоса'
+[poll-voters] skipping redundant count '8 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '13 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (4)', 'Против (8)', 'Воздержался (1)', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'Сенатор NG | Hunter K. | 122338 pavelrestl']
+[poll-voters] option 'Против (8)': status=captured_after_selection, visible_user_rows=8, scroll_steps=0
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '13 голосов': pages=1, visible_user_rows=13, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1571978153071485006'
+[poll-voters] message 1573009872273022986: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1571978153071485006'
+Warning: publication 1571978153071485006 failed: 'NoneType' object is not iterable
+[24/50] Открываю публикацию 1570859112374210580…
+[poll-voters] message 1570859176400392213: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '9 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] clicking vote_count '9 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (9)', 'Против (0)', 'Воздержался (0)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'кэнни xaqqk', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'Зам. Спикера | Afelia | 14077 afeliami', 'mlorv mlorv', 'П | Mei Roove | 200618 al.zaru', 'Сенатор NG | Hunter K. | 122338 pavelrestl', 'ПРОкурор | Vasya Congres | 87684 dl344']
+[poll-voters] result for '9 голосов': pages=1, visible_user_rows=9, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570859112374210580'
+[poll-voters] message 1570859383665987604: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570859112374210580'
+Warning: publication 1570859112374210580 failed: 'NoneType' object is not iterable
+[25/50] Открываю публикацию 1570835399679680583…
+[poll-voters] message 1570838712638513255: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '10 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping redundant count '2 голоса'
+[poll-voters] clicking vote_count '12 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (10)', 'Против (0)', 'Воздержался (2)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'ЗГДНБ/ Really Lawyer | 27007 xaqqk', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'Зам. Спикера | Afelia | 14077 afeliami', 'П | Mei Roove | 200618 al.zaru', 'гогаль .gogal', 'Сенатор NG | Hunter K. | 122338 pavelrestl', 'ПРОкурор | Vasya Congres | 87684 dl344']
+[poll-voters] option 'Воздержался (2)': status=captured_after_selection, visible_user_rows=2, scroll_steps=0
+[poll-voters] result for '12 голосов': pages=1, visible_user_rows=12, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570835399679680583'
+[poll-voters] message 1570839229750317219: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570835399679680583'
+Warning: publication 1570835399679680583 failed: 'NoneType' object is not iterable
+[26/50] Открываю публикацию 1570830679107706950…
+[poll-voters] message 1570830748569706507: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '13 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '14 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'Да (13)', 'Нет (0)', 'Воздержался (1)', 'Сен. EMS | Kiray Fair | 37492 izverus', 'ЗГДНБ/ Really Lawyer | 27007 xaqqk', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'MrPocoPo sky_992', 'Зам. Спикера | Afelia | 14077 afeliami', 'wn / jhonny scoutezaki / 164317 jhonnyycc', 'Сен. EMS | Himeno K.| 23899 .h1meno.', 'mlorv mlorv', 'П | Mei Roove | 200618 al.zaru', 'гогаль .gogal', 'Сенатор NG | Hunter K. | 122338 pavelrestl', 'ПРОкурор | Vasya Congres | 87684 dl344']
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '14 голосов': pages=1, visible_user_rows=14, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570830679107706950'
+[poll-voters] message 1570832009914490952: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570830679107706950'
+Warning: publication 1570830679107706950 failed: 'NoneType' object is not iterable
+[27/50] Открываю публикацию 1570809262081310862…
+[poll-voters] message 1570854668957917325: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '8 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping redundant count '2 голоса'
+[poll-voters] clicking vote_count '10 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (8)', 'Против (0)', 'Воздержался (2)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'ЗГДНБ/ Really Lawyer | 27007 xaqqk', 'Senator SANG | Asher K. | 68553 zarke_', 'Зам. Спикера | Afelia | 14077 afeliami', 'mlorv mlorv', 'П | Mei Roove | 200618 al.zaru', 'Сенатор NG | Hunter K. | 122338 pavelrestl', 'ПРОкурор | Vasya Congres | 87684 dl344']
+[poll-voters] option 'Воздержался (2)': status=captured_after_selection, visible_user_rows=2, scroll_steps=0
+[poll-voters] result for '10 голосов': pages=1, visible_user_rows=10, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809262081310862'
+[poll-voters] message 1570856473066471641: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809262081310862'
+Warning: publication 1570809262081310862 failed: 'NoneType' object is not iterable
+[28/50] Открываю публикацию 1570809217755914250…
+[poll-voters] message 1570854202568081553: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '8 голосов'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] clicking vote_count '9 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (8)', 'Против (0)', 'Воздержался (1)', 'Head. K9 | Socrat Wild | 96031 socrat_1hp', 'ЗГДНБ/ Really Lawyer | 27007 xaqqk', 'vobla voblovna', 'Senator SANG | Asher K. | 68553 zarke_', 'Зам. Спикера | Afelia | 14077 afeliami', 'П | Mei Roove | 200618 al.zaru', 'Сенатор NG | Hunter K. | 122338 pavelrestl', 'ПРОкурор | Vasya Congres | 87684 dl344']
+[poll-voters] option 'Воздержался (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] result for '9 голосов': pages=1, visible_user_rows=9, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809217755914250'
+[poll-voters] message 1570859429300150272: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809217755914250'
+Warning: publication 1570809217755914250 failed: 'NoneType' object is not iterable
+[29/50] Открываю публикацию 1570809115452637274…
+[poll-voters] message 1570851891901104152: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping zero-vote control '0 голосов'
+[poll-voters] skipping redundant count '10 голосов'
+[poll-voters] clicking vote_count '11 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'За (1)', 'Против (0)', 'Воздержался (10)', 'mlorv mlorv']
+[poll-voters] option 'Воздержался (10)': status=captured_after_selection, visible_user_rows=10, scroll_steps=0
+[poll-voters] result for '11 голосов': pages=1, visible_user_rows=11, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809115452637274'
+[poll-voters] message 1570859460019101788: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
+[poll-voters] poll overlay controls: ['Управление профилем и статусом']
+[poll-voters] result for 'Просмотреть опрос': pages=1, visible_user_rows=0, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809115452637274'
+Warning: publication 1570809115452637274 failed: 'NoneType' object is not iterable
+[30/50] Открываю публикацию 1570809061149114530…
+[poll-voters] message 1570844756928372757: found 4 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] skipping redundant count '2 голоса'
+[poll-voters] skipping redundant count '1 голос'
+[poll-voters] skipping redundant count '8 голосов'
+[poll-voters] clicking vote_count '11 голосов' tag=button href=None
+[poll-voters] poll overlay controls: ['Закрыть', 'Да (2)', 'Против (1)', 'Воздержался (8)', 'mlorv mlorv', 'П | Mei Roove | 200618 al.zaru']
+[poll-voters] option 'Против (1)': status=captured_after_selection, visible_user_rows=1, scroll_steps=0
+[poll-voters] option 'Воздержался (8)': status=captured_after_selection, visible_user_rows=8, scroll_steps=0
+[poll-voters] result for '11 голосов': pages=1, visible_user_rows=11, url='https://discord.com/channels/1514607659758653560/1515423283606982776/threads/1570809061149114530'
+[poll-voters] message 1570851282766401546: found 1 safe control(s) after 0 scrolls; will open one positive result-count control
+[poll-voters] clicking view_poll 'Просмотреть опрос' tag=button href=None
