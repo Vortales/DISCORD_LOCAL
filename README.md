@@ -1,21 +1,32 @@
 # Discord Forum Collector
 
-Collects a Discord forum using the logged-in Chromium web UI (no bot or bot token). The GUI and collector are the project; generated exports, diagnostics, screenshots, and archives are not source files and should stay out of version control.
+Сбор данных форума Discord через залогиненный веб-интерфейс Chromium — без бота и bot token. Имена, ID и роли голосовавших сохраняются только когда Discord показывает их в интерфейсе текущему аккаунту; скрытые данные не извлекаются.
 
-## Run
+## Версии
+
+Каждая версия хранится в отдельной папке в корне репозитория:
+
+- `v1/` — предыдущая версия приложения.
+- `v2/` — текущая версия: добавлены копирование/вставка в полях GUI и автоматическое сохранение введённых значений и выбранных параметров.
+
+Запуск актуальной версии из корня репозитория:
 
 ```bash
 python discord_forum_gui.py
 ```
 
-Choose **Полный сбор** to export the forum or **Тест публикации** to inspect a single post. The first run installs Playwright/Chromium if needed. Sign in to Discord in the opened browser; the local profile is reused on later runs.
-
-To run the collector directly:
+Можно запустить v2 напрямую:
 
 ```bash
-python discord_forum_collect.py [GUILD_ID] [FORUM_CHANNEL_ID] --workers 4
+python v2/discord_forum_gui.py
 ```
 
-Default IDs are `1514607659758653560` (server) and `1515423283606982776` (forum channel). Single-post test mode uses `--post-id POST_ID`. To scrape forum posts in the collector's discovery order and stop after a chosen post (inclusive), use `--stop-after-post-id POST_ID`; this mode runs sequentially so no later post is started. The GUI has a matching stop-after field for full collection. The ID must be present in the discovered forum cards.
+В v2 работают `Ctrl+C`, `Ctrl+X`, `Ctrl+V`, `Ctrl+A` и контекстное меню правой кнопкой во всех полях ввода. Настройки (ID сервера/канала, ID публикаций, папка экспорта, таймаут, число задач и флажки) автоматически восстанавливаются при следующем запуске. Настройки, браузерный профиль и папка экспорта каждой версии изолированы внутри её каталога и исключены из Git.
 
-Exports are written under `discord_forum_export/` by default. Poll messages include `poll_voter_details`, with the detected count link, its URL, navigation result, visible user rows, and failure status; each post also includes a concise `poll_voter_diagnostics` summary. Voter names, IDs, and roles are recorded only when Discord visibly exposes them to the signed-in account; information Discord hides cannot be recovered or inferred.
+Для запуска сборщика напрямую перейдите в папку нужной версии, например:
+
+```bash
+python v2/discord_forum_collect.py [GUILD_ID] [FORUM_CHANNEL_ID] --workers 4
+```
+
+По умолчанию используются сервер `1514607659758653560` и форум-канал `1515423283606982776`. Для точечного теста используйте `--post-id POST_ID`. Для последовательного сбора до публикации включительно — `--stop-after-post-id POST_ID`.

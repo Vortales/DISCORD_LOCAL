@@ -972,10 +972,22 @@ async def inspect_poll_voters(
                                 })
                                 continue
                             if option.get("selected"):
+                                # The currently selected answer is already displayed when the overlay opens.
+                                # It is only considered captured if we actually extracted visible user rows.
+                                selected_result = next(
+                                    (result for result in result_pages if result.get("has_overlay")),
+                                    {"users": [], "has_overlay": False},
+                                )
+                                selected_users = selected_result.get("users", [])
+                                selected_count = len(selected_users)
                                 item["overlay_voter_lists"].append({
                                     "label": option.get("label"),
-                                    "status": "already_selected_and_captured",
-                                    "visible_user_rows": len(result_pages[0].get("users", [])) if result_pages else 0,
+                                    "selected": True,
+                                    "status": "captured_selected_option" if selected_count else "selected_option_no_visible_user_rows",
+                                    "expected_votes": option_votes,
+                                    "visible_user_rows": selected_count,
+                                    "count_matches": selected_count == option_votes if option_votes is not None else None,
+                                    "result": selected_result,
                                 })
                                 continue
                             refreshed_options = await page.evaluate(
@@ -999,19 +1011,92 @@ async def inspect_poll_voters(
                             )
                             try:
                                 await option_button.scroll_into_view_if_needed(timeout=2500)
+                                before_option_view = await page.evaluate(VOTER_VIEW_SCRIPT)
                                 await option_button.click(timeout=3000)
-                                await page.wait_for_timeout(250)
+                                option_wait_error = None
+                                try:
+                                    await page.wait_for_function(
+                                        """arg => {
+                                          const overlays = [...document.querySelectorAll('[role=\"dialog\"], [aria-modal=\"true\"], [role=\"tooltip\"]')];
+                                          const overlay = overlays[overlays.length - 1];
+                                          if (!overlay) return false;
+                                          const normalize = value => (value || '').replace(/\s+/g, ' ').trim();
+                                          const controls = [...overlay.querySelectorAll('a[href], button, [role=\"button\"], [role=\"tab\"], [role=\"radio\"]')];
+                                          const selected = controls.some(el => {
+                                            const label = normalize(el.innerText) || normalize(el.getAttribute('aria-label')) || normalize(el.title);
+                                            const cls = typeof el.className === 'string' ? el.className : '';
+                                            return label === arg.label && (el.getAttribute('aria-selected') === 'true'
+                                              || el.getAttribute('aria-pressed') === 'true'
+                                              || el.getAttribute('aria-checked') === 'true'
+                                              || /(?:^|\\s)(?:selected|active)(?:\\s|$)/i.test(cls));
+                                          });
+                                          const visibleUsers = [...overlay.querySelectorAll('[data-user-id], [class*=\"username\" i]')]
+                                            .filter(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+                                            .map(el => `${el.getAttribute('data-user-id') || ''}:${normalize(el.innerText)}`)
+                                            .filter(Boolean).sort().join('|');
+                                          return selected || visibleUsers !== arg.before_users
+                                            || normalize(overlay.innerText) !== arg.before_text;
+                                        }""",
+                                        arg={
+                                            "label": option.get("label", ""),
+                                            "before_users": "|".join(sorted(
+                                                f"{user.get('id') or ''}:{user.get('name') or ''}"
+                                                for user in before_option_view.get("users", [])
+                                            )),
+                                            "before_text": re.sub(r"\s+", " ", before_option_view.get("overlay_text", "")).strip(),
+                                        },
+                                        timeout=5000,
+                                    )
+                                except Exception as exc:
+                                    option_wait_error = str(exc)
+                                list_wait_error = None
+                                if option_votes is None or option_votes > 0:
+                                    try:
+                                        await page.wait_for_function(
+                                            """() => {
+                                              const overlays = [...document.querySelectorAll('[role=\"dialog\"], [aria-modal=\"true\"], [role=\"tooltip\"]')];
+                                              const overlay = overlays[overlays.length - 1];
+                                              return !!overlay && [...overlay.querySelectorAll('[data-user-id], [class*=\"username\" i]')]
+                                                .some(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden'
+                                                  && (el.innerText || el.getAttribute('aria-label') || el.getAttribute('alt') || '').trim());
+                                            }""",
+                                            timeout=2500,
+                                        )
+                                    except Exception as exc:
+                                        list_wait_error = str(exc)
                                 option_result = await capture_overlay_voters(page)
-                                item["overlay_voter_lists"].append({
+                                option_user_count = len(option_result.get("users", []))
+                                selection_confirmed = option_wait_error is None
+                                option_status = (
+                                    "captured_after_selection"
+                                    if selection_confirmed and option_user_count
+                                    else "no_visible_rows_after_confirmed_selection"
+                                    if selection_confirmed
+                                    else "selection_not_confirmed"
+                                )
+                                option_entry = {
                                     "label": option.get("label"),
                                     "clicked": True,
+                                    "selected": option.get("selected", False),
+                                    "selection_confirmed": selection_confirmed,
+                                    "list_ready": (option_votes == 0 or option_user_count > 0) if option_votes is not None else option_user_count > 0,
+                                    "status": option_status,
+                                    "expected_votes": option_votes,
+                                    "visible_user_rows": option_user_count,
+                                    "count_matches": option_user_count == option_votes if option_votes is not None else None,
                                     "result": option_result,
-                                })
-                                option_user_count = len(option_result.get("users", []))
-                                user_count += option_user_count
+                                }
+                                if option_wait_error:
+                                    option_entry["selection_wait_error"] = option_wait_error
+                                if list_wait_error:
+                                    option_entry["list_wait_error"] = list_wait_error
+                                item["overlay_voter_lists"].append(option_entry)
+                                if selection_confirmed:
+                                    user_count += option_user_count
                                 print(
                                     f"[poll-voters] option {option.get('label')!r}: "
-                                    f"visible_user_rows={option_user_count}, scroll_steps={option_result.get('overlay_scroll_steps', 0)}"
+                                    f"status={option_status}, visible_user_rows={option_user_count}, "
+                                    f"scroll_steps={option_result.get('overlay_scroll_steps', 0)}"
                                 )
                             except Exception as exc:
                                 item["overlay_voter_lists"].append({
